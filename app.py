@@ -81,18 +81,56 @@ COLUMN_MAP_CANDIDATES = {
 }
 
 
-def load_teacher_database(uploaded_file) -> pd.DataFrame:
+def read_teacher_raw(uploaded_file):
+    """Lee la base de docentes y detecta automáticamente la fila de encabezados.
+
+    Algunas bases institucionales tienen un título en la primera fila y los encabezados
+    reales aparecen más abajo. Esta función prueba varias filas hasta encontrar columnas
+    como NOMBRE COMPLETO, CEDULA, GENERO, JORNADA, CARGO, GRADO y NIVEL DE ENSEÑANZA.
+    """
     name = uploaded_file.name.lower()
     if name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+        uploaded_file.seek(0)
+        return pd.read_csv(uploaded_file)
+
+    best_df = None
+    best_score = -1
+    best_header = 0
+    for header_row in range(0, 10):
+        uploaded_file.seek(0)
+        try:
+            candidate = pd.read_excel(uploaded_file, header=header_row)
+        except Exception:
+            continue
+        candidate = candidate.dropna(how="all").copy()
+        if candidate.empty:
+            continue
+        score = 0
+        for options in COLUMN_MAP_CANDIDATES.values():
+            if find_column(candidate, options) is not None:
+                score += 1
+        if score > best_score:
+            best_df = candidate
+            best_score = score
+            best_header = header_row
+
+    if best_df is None:
+        uploaded_file.seek(0)
+        return pd.read_excel(uploaded_file)
+
+    if best_header != 0:
+        st.info(f"Se detectó automáticamente que los encabezados de la base están en la fila {best_header + 1}.")
+    return best_df
+
+
+def load_teacher_database(uploaded_file) -> pd.DataFrame:
+    df = read_teacher_raw(uploaded_file)
     df = df.dropna(how="all").copy()
     mapping = {key: find_column(df, options) for key, options in COLUMN_MAP_CANDIDATES.items()}
     missing = [k for k, v in mapping.items() if v is None]
     if missing:
         st.warning("No se encontraron algunas columnas esperadas: " + ", ".join(missing))
-    out = pd.DataFrame()
+    out = pd.DataFrame(index=df.index)
     for key, col in mapping.items():
         out[key] = df[col] if col else ""
     out["nombre"] = out["nombre"].astype(str).str.strip()
