@@ -1,4 +1,4 @@
-# Anexo 1 Tutor v6
+# Anexo 1 Tutor v5
 
 Aplicación web en Streamlit para diligenciar el Anexo 1 PTAFI 3.0 sobre la plantilla oficial del Ministerio, sin alterar su estructura.
 
@@ -36,5 +36,5 @@ streamlit run app.py
 7. Descargar el archivo final con nombre `E#_DANE.xlsx`.
 
 
-## v6
+## v5
 Corrige la generación del Excel para evitar reparación en Microsoft Excel. Conserva listas desplegables, formatos y hoja oculta escribiendo sobre la plantilla oficial con openpyxl.

@@ -314,78 +314,55 @@ def set_cell_value(cell, value, numeric=False):
     t_node.text = str(value)
 
 
-def xml_escape_text(value) -> str:
-    from xml.sax.saxutils import escape
-    return escape(str(value), {"\"": "&quot;"})
-
-
-def replace_cell_xml(sheet_xml: str, ref: str, value, numeric: bool = False) -> str:
-    """Reemplaza únicamente el contenido de una celda existente, preservando atributos/estilos.
-
-    Se usa edición textual del XML para no reserializar la hoja completa. Así se conservan
-    exactamente las validaciones extendidas x14, las listas desplegables, la hoja oculta,
-    comentarios, relaciones y demás estructura del archivo original.
-    """
-    pattern = re.compile(
-        rf'<c\b(?=[^>]*\br="{re.escape(ref)}")([^>]*)>(.*?)</c>|<c\b(?=[^>]*\br="{re.escape(ref)}")([^>]*)/>',
-        re.DOTALL,
-    )
-
-    def build(attrs: str) -> str:
-        # Quitar tipo anterior, pero conservar estilo, referencia y demás atributos seguros.
-        attrs_clean = re.sub(r'\s+t="[^"]*"', '', attrs)
-        if value in (None, ""):
-            return f'<c{attrs_clean}/>'
-        if numeric:
-            digits = clean_dane(value)
-            if not digits:
-                return f'<c{attrs_clean}/>'
-            return f'<c{attrs_clean}><v>{digits}</v></c>'
-        text = xml_escape_text(value)
-        return f'<c{attrs_clean} t="inlineStr"><is><t>{text}</t></is></c>'
-
-    def repl(match):
-        attrs = match.group(1) if match.group(1) is not None else match.group(3)
-        return build(attrs)
-
-    new_xml, count = pattern.subn(repl, sheet_xml, count=1)
-    if count == 0:
-        # La plantilla oficial trae las celdas A:AG hasta la fila 501. Si alguna no existe,
-        # no insertamos filas/celdas para evitar tocar la estructura XML.
-        return sheet_xml
-    return new_xml
-
-
 def write_records_to_template(template_bytes, records):
-    """Escribe registros sobre la plantilla de forma rápida y segura.
+    """Escribe los registros usando openpyxl para generar un .xlsx válido.
 
-    No usa pandas.to_excel, no inserta filas y no reserializa todo el libro con openpyxl.
-    Edita el XML de la hoja de actividades en una sola pasada, conservando intactas las
-    validaciones/listas desplegables, la hoja oculta y la estructura original del Anexo 1.
+    Esta versión prioriza que Excel abra el archivo sin reparación. Se carga la plantilla
+    original, se escriben únicamente las celdas A:AG de la hoja de actividades y se guarda
+    nuevamente conservando hojas, formatos, listas desplegables, hoja oculta y estructura.
     """
     if len(records) > MAX_ROWS:
         raise ValueError(f"La plantilla solo permite {MAX_ROWS} registros.")
 
+    wb = load_workbook(io.BytesIO(template_bytes), data_only=False)
+    ws = get_worksheet(wb)
     allowed = get_allowed_lists(template_bytes)
-    sheet_path = find_activity_sheet_path(template_bytes)
 
-    # 1) Construir mapa de valores para A:AG, filas 2:501.
-    #    Las filas sobrantes quedan limpias, sin tocar estilos ni validaciones.
-    values = {}
-    numeric_cells = set()
+    def safe_int(value):
+        digits = clean_dane(value)
+        if not digits:
+            return None
+        try:
+            return int(digits)
+        except Exception:
+            return digits
 
+    def write_cell(row_num, col_num, value, numeric=False):
+        cell = ws.cell(row=row_num, column=col_num)
+        if value in (None, ""):
+            cell.value = None
+            return
+        if numeric:
+            cell.value = safe_int(value)
+            cell.number_format = "0"
+        else:
+            cell.value = str(value).strip()
+
+    # Limpiar únicamente contenido A:AG de las filas de registro; no se eliminan filas,
+    # estilos, validaciones, formatos ni listas desplegables.
     for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
         for col in range(FIRST_COL, LAST_COL + 1):
-            ref = cell_ref(row_num, col)
-            values[ref] = ""
+            ws.cell(row=row_num, column=col).value = None
 
+    # Escribir registros.
     for offset, record in enumerate(records):
         row_num = DATA_START_ROW + offset
         activity_values = record.get("actividades", {})
+
         base_values = {
             1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
             2: record.get("nombre", ""),
-            3: clean_dane(record.get("cedula", "")),
+            3: record.get("cedula", ""),
             4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
             5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
             6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
@@ -396,57 +373,22 @@ def write_records_to_template(template_bytes, records):
         }
 
         for col in range(1, 11):
-            ref = cell_ref(row_num, col)
-            values[ref] = base_values.get(col, "")
-            if col in {3, 9, 10}:
-                numeric_cells.add(ref)
+            # C, I y J se escriben como número para evitar el aviso verde de Excel.
+            write_cell(row_num, col, base_values.get(col, ""), numeric=(col in {3, 9, 10}))
 
         for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
             idx = col - ACTIVITY_START_COL
             header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
             val = activity_values.get(header, NO)
             val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
-            values[cell_ref(row_num, col)] = val
+            write_cell(row_num, col, val, numeric=False)
 
-    def build_cell(attrs: str, value, numeric: bool) -> str:
-        # Conserva r="...", s="..." y otros atributos seguros. Solo quita t="..." cuando se reescribe.
-        attrs_clean = re.sub(r'\s+t="[^"]*"', '', attrs)
-        attrs_clean = re.sub(r'\s+cm="[^"]*"', '', attrs_clean)
-        attrs_clean = re.sub(r'\s+vm="[^"]*"', '', attrs_clean)
-        if value in (None, ""):
-            return f'<c{attrs_clean}/>'
-        if numeric:
-            digits = clean_dane(value)
-            if not digits:
-                return f'<c{attrs_clean}/>'
-            return f'<c{attrs_clean}><v>{digits}</v></c>'
-        text = xml_escape_text(value)
-        return f'<c{attrs_clean} t="inlineStr"><is><t>{text}</t></is></c>'
+    # Mantener la hoja Listas oculta si así venía en la plantilla.
+    if "Listas" in wb.sheetnames:
+        wb["Listas"].sheet_state = "hidden"
 
-    # 2) Editar la hoja en una sola pasada. Esto evita el bloqueo/lentitud de la versión anterior.
-    cell_pattern = re.compile(
-        r'<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)>(.*?)</c>|<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)/>',
-        re.DOTALL,
-    )
-
-    with zipfile.ZipFile(io.BytesIO(template_bytes), "r") as zin:
-        sheet_xml = zin.read(sheet_path).decode("utf-8")
-
-        def repl(match):
-            ref = match.group(1) or match.group(4)
-            if ref not in values:
-                return match.group(0)
-            attrs = match.group(2) if match.group(1) else match.group(5)
-            return build_cell(attrs, values.get(ref, ""), ref in numeric_cells)
-
-        sheet_xml = cell_pattern.sub(repl, sheet_xml)
-
-        output = io.BytesIO()
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = sheet_xml.encode("utf-8") if item.filename == sheet_path else zin.read(item.filename)
-                zout.writestr(item, data)
-
+    output = io.BytesIO()
+    wb.save(output)
     output.seek(0)
     return output.getvalue()
 
