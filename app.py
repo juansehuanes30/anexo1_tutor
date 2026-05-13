@@ -21,7 +21,7 @@ FIRST_COL = 1
 LAST_COL = 33  # AG
 ACTIVITY_START_COL = 11  # K
 ACTIVITY_END_COL = 33  # AG
-SI = "Si"
+SI = "Sí"
 NO = "No"
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📘", layout="wide")
@@ -319,6 +319,16 @@ def xml_escape_text(value) -> str:
     return escape(str(value), {"\"": "&quot;"})
 
 
+def ensure_standard_data_validations(sheet_xml: str) -> str:
+    """Agrega validaciones estándar para que Excel muestre los desplegables."""
+    validations = '<dataValidations count="8"><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="A2:A501"><formula1>Listas!$A$2:$A$10</formula1></dataValidation><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="D2:D501"><formula1>Listas!$B$2:$B$4</formula1></dataValidation><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="E2:E501"><formula1>Listas!$C$2:$C$5</formula1></dataValidation><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="F2:F501"><formula1>Listas!$D$2:$D$6</formula1></dataValidation><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="G2:G501"><formula1>Listas!$E$2:$E$17</formula1></dataValidation><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="H2:H501"><formula1>Listas!$F$2:$F$6</formula1></dataValidation><dataValidation type="custom" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="I2:J501"><formula1>AND(LEN(I2)=12,ISNUMBER(I2))</formula1></dataValidation><dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="K2:AG501"><formula1>Listas!$G$2:$G$3</formula1></dataValidation></dataValidations>'
+    if '<dataValidations' in sheet_xml:
+        sheet_xml = re.sub(r'<dataValidations\b[^>]*>.*?</dataValidations>', validations, sheet_xml, count=1, flags=re.DOTALL)
+    else:
+        sheet_xml = sheet_xml.replace('<pageMargins', validations + '<pageMargins', 1)
+    return sheet_xml
+
+
 def replace_cell_xml(sheet_xml: str, ref: str, value, numeric: bool = False) -> str:
     """Reemplaza únicamente el contenido de una celda existente, preservando atributos/estilos.
 
@@ -357,12 +367,11 @@ def replace_cell_xml(sheet_xml: str, ref: str, value, numeric: bool = False) -> 
 
 
 def write_records_to_template(template_bytes, records):
-    """Escribe registros sobre la plantilla sin corromper XML y conservando listas desplegables.
+    """Escribe registros sobre la plantilla de forma rápida y segura.
 
-    Esta versión no usa pandas.to_excel ni guarda el libro completo con openpyxl. Edita solo
-    los valores de las celdas A:AG ya existentes en la hoja de actividades. Como no reserializa
-    la hoja completa, se mantienen intactas las validaciones x14 de Excel usadas por las listas
-    desplegables de A, D-H y K-AG.
+    No usa pandas.to_excel, no inserta filas y no reserializa todo el libro con openpyxl.
+    Edita el XML de la hoja de actividades en una sola pasada, conservando intactas las
+    validaciones/listas desplegables, la hoja oculta y la estructura original del Anexo 1.
     """
     if len(records) > MAX_ROWS:
         raise ValueError(f"La plantilla solo permite {MAX_ROWS} registros.")
@@ -370,49 +379,78 @@ def write_records_to_template(template_bytes, records):
     allowed = get_allowed_lists(template_bytes)
     sheet_path = find_activity_sheet_path(template_bytes)
 
+    # 1) Construir mapa de valores para A:AG, filas 2:501.
+    #    Las filas sobrantes quedan limpias, sin tocar estilos ni validaciones.
+    values = {}
+    numeric_cells = set()
+
+    for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
+        for col in range(FIRST_COL, LAST_COL + 1):
+            ref = cell_ref(row_num, col)
+            values[ref] = ""
+
+    for offset, record in enumerate(records):
+        row_num = DATA_START_ROW + offset
+        activity_values = record.get("actividades", {})
+        base_values = {
+            1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
+            2: record.get("nombre", ""),
+            3: clean_dane(record.get("cedula", "")),
+            4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
+            5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
+            6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
+            7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
+            8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
+            9: clean_dane(record.get("dane_ee", "")),
+            10: clean_dane(record.get("dane_sede", "")),
+        }
+
+        for col in range(1, 11):
+            ref = cell_ref(row_num, col)
+            values[ref] = base_values.get(col, "")
+            if col in {3, 9, 10}:
+                numeric_cells.add(ref)
+
+        for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
+            idx = col - ACTIVITY_START_COL
+            header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
+            val = activity_values.get(header, NO)
+            val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
+            values[cell_ref(row_num, col)] = val
+
+    def build_cell(attrs: str, value, numeric: bool) -> str:
+        # Conserva r="...", s="..." y otros atributos seguros. Solo quita t="..." cuando se reescribe.
+        attrs_clean = re.sub(r'\s+t="[^"]*"', '', attrs)
+        attrs_clean = re.sub(r'\s+cm="[^"]*"', '', attrs_clean)
+        attrs_clean = re.sub(r'\s+vm="[^"]*"', '', attrs_clean)
+        if value in (None, ""):
+            return f'<c{attrs_clean}/>'
+        if numeric:
+            digits = clean_dane(value)
+            if not digits:
+                return f'<c{attrs_clean}/>'
+            return f'<c{attrs_clean}><v>{digits}</v></c>'
+        text = xml_escape_text(value)
+        return f'<c{attrs_clean} t="inlineStr"><is><t>{text}</t></is></c>'
+
+    # 2) Editar la hoja en una sola pasada. Esto evita el bloqueo/lentitud de la versión anterior.
+    cell_pattern = re.compile(
+        r'<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)>(.*?)</c>|<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)/>',
+        re.DOTALL,
+    )
+
     with zipfile.ZipFile(io.BytesIO(template_bytes), "r") as zin:
-        original_sheet_xml = zin.read(sheet_path).decode("utf-8")
-        sheet_xml = original_sheet_xml
+        sheet_xml = zin.read(sheet_path).decode("utf-8")
 
-        # Limpiar todas las celdas diligenciables existentes A:AG, filas 2:501,
-        # conservando estilos y validaciones de la plantilla.
-        for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
-            for col in range(FIRST_COL, LAST_COL + 1):
-                sheet_xml = replace_cell_xml(sheet_xml, cell_ref(row_num, col), "", numeric=False)
+        def repl(match):
+            ref = match.group(1) or match.group(4)
+            if ref not in values:
+                return match.group(0)
+            attrs = match.group(2) if match.group(1) else match.group(5)
+            return build_cell(attrs, values.get(ref, ""), ref in numeric_cells)
 
-        # Escribir registros celda por celda.
-        for offset, record in enumerate(records):
-            row_num = DATA_START_ROW + offset
-            activity_values = record.get("actividades", {})
-            base_values = {
-                1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
-                2: record.get("nombre", ""),
-                3: record.get("cedula", ""),
-                4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
-                5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
-                6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
-                7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
-                8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
-                9: clean_dane(record.get("dane_ee", "")),
-                10: clean_dane(record.get("dane_sede", "")),
-            }
-
-            for col in range(1, 11):
-                # C, I y J como número para evitar el aviso verde de Excel.
-                # La estructura de la plantilla y sus validaciones se conserva.
-                sheet_xml = replace_cell_xml(
-                    sheet_xml,
-                    cell_ref(row_num, col),
-                    base_values.get(col, ""),
-                    numeric=(col in {3, 9, 10}),
-                )
-
-            for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
-                idx = col - ACTIVITY_START_COL
-                header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
-                val = activity_values.get(header, NO)
-                val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
-                sheet_xml = replace_cell_xml(sheet_xml, cell_ref(row_num, col), val, numeric=False)
+        sheet_xml = cell_pattern.sub(repl, sheet_xml)
+        sheet_xml = ensure_standard_data_validations(sheet_xml)
 
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zout:
@@ -617,6 +655,9 @@ def css():
 
 css()
 
+# -------------------------
+# Estado de la aplicación
+# -------------------------
 if "template_bytes" not in st.session_state:
     st.session_state.template_bytes = None
 if "teacher_df" not in st.session_state:
@@ -627,15 +668,24 @@ if "activities" not in st.session_state:
     st.session_state.activities = []
 if "weeks" not in st.session_state:
     st.session_state.weeks = []
+if "step" not in st.session_state:
+    st.session_state.step = 0
+if "reset_key" not in st.session_state:
+    st.session_state.reset_key = 0
+if "last_add_message" not in st.session_state:
+    st.session_state.last_add_message = ""
 
-st.markdown('<div class="card"><div class="step-title">PASO 0 — Configuración inicial</div><div class="small-note">Carga la plantilla oficial y la base docente. Si ya cargaste archivos en esta sesión, puedes conservarlos.</div></div>', unsafe_allow_html=True)
+# -------------------------
+# PASO 0
+# -------------------------
+st.markdown('<div class="card"><div class="step-title">PASO 0 — Configuración inicial</div><div class="small-note">Carga la plantilla oficial y la base docente. Completa todos los datos para continuar.</div></div>', unsafe_allow_html=True)
 
 with st.container():
-    col_name, col_delivery, col_dane, col_sede = st.columns([1.4, .8, 1, 1])
-    tutor_name = col_name.text_input("Nombre del tutor", placeholder="Ejemplo: David")
-    entrega = col_delivery.selectbox("Número de entrega", [f"E{i}" for i in range(1, 11)], index=0)
-    dane_ee = col_dane.text_input("Código DANE del EE", placeholder="218150000578", max_chars=12)
-    dane_sede = col_sede.text_input("Código DANE de la sede", placeholder="218150000578", max_chars=12)
+    col_name, col_delivery, col_dane, col_sede = st.columns([1.4, .9, 1, 1])
+    tutor_name = col_name.text_input("Nombre del tutor", placeholder="Ejemplo: David", key="tutor_name")
+    entrega = col_delivery.selectbox("Número de entrega", ["Selecciona entrega"] + [f"E{i}" for i in range(1, 11)], index=0, key="entrega")
+    dane_ee = col_dane.text_input("Código DANE del EE", placeholder="218150000578", max_chars=12, key="dane_ee")
+    dane_sede = col_sede.text_input("Código DANE de la sede", placeholder="218150000578", max_chars=12, key="dane_sede")
 
     c1, c2 = st.columns(2)
     with c1:
@@ -671,39 +721,82 @@ with st.container():
         else:
             st.info("Se conservará la base de docentes cargada en esta sesión.")
 
-ready = st.session_state.template_bytes is not None and st.session_state.teacher_df is not None
-if not ready:
-    st.info("Carga el Anexo 1 oficial y la base de datos para activar el flujo de diligenciamiento.")
+missing = []
+if not str(tutor_name).strip():
+    missing.append("nombre del tutor")
+if entrega == "Selecciona entrega":
+    missing.append("número de entrega")
+if len(clean_dane(dane_ee)) != 12:
+    missing.append("Código DANE del EE de 12 dígitos")
+if len(clean_dane(dane_sede)) != 12:
+    missing.append("Código DANE de la sede de 12 dígitos")
+if st.session_state.template_bytes is None:
+    missing.append("archivo Anexo 1 oficial")
+if st.session_state.teacher_df is None:
+    missing.append("base de datos de docentes")
+
+col_continue, col_status = st.columns([.25, .75])
+with col_continue:
+    continue_clicked = st.button("➡️ Continuar", use_container_width=True, type="primary")
+with col_status:
+    if st.session_state.step == 0:
+        st.caption("El botón permite avanzar cuando todos los datos iniciales estén completos.")
+
+if continue_clicked:
+    if missing:
+        st.error("No puedes avanzar todavía. Falta: " + ", ".join(missing) + ".")
+        st.session_state.step = 0
+    else:
+        st.session_state.step = 1
+        st.success("Configuración inicial completa. Puedes continuar con el registro de actividades.")
+        st.rerun()
+
+if st.session_state.step == 0:
+    if missing:
+        st.info("Pendiente por completar: " + ", ".join(missing) + ".")
     st.stop()
 
-if len(clean_dane(dane_ee)) != 12 or len(clean_dane(dane_sede)) != 12:
-    st.warning("Los códigos DANE del EE y de la sede deben tener 12 dígitos. Puedes continuar ajustándolos antes de descargar.")
-
+# -------------------------
+# PASOS 1, 2, 3 y 4
+# -------------------------
 df = st.session_state.teacher_df.copy()
 activities = st.session_state.activities
 weeks = st.session_state.weeks or [f"Semana {i}" for i in range(1, 9)]
+reset_key = st.session_state.reset_key
+
+if st.session_state.last_add_message:
+    st.success(st.session_state.last_add_message)
+    st.session_state.last_add_message = ""
 
 st.markdown('<div class="card"><div class="step-title">PASO 1 — Seleccionar semana</div></div>', unsafe_allow_html=True)
-semana = st.selectbox("Semana de acompañamiento", weeks)
+semana = st.selectbox("Semana de acompañamiento", weeks, key=f"semana_{reset_key}")
 
-st.markdown('<div class="card"><div class="step-title">PASO 2 — Seleccionar docentes</div><div class="small-note">Usa modo individual o grupal. Puedes filtrar para encontrar docentes más rápido.</div></div>', unsafe_allow_html=True)
+st.markdown('<div class="card"><div class="step-title">PASO 2 — Seleccionar docentes</div><div class="small-note">Usa modo individual, grupal o todos. En “Todos” puedes quitar docentes antes de agregar el registro.</div></div>', unsafe_allow_html=True)
 
 filter_cols = st.columns(3)
 for label, field, col in [("Filtrar por jornada", "jornada", filter_cols[0]), ("Filtrar por grado", "grado", filter_cols[1]), ("Filtrar por nivel", "nivel", filter_cols[2])]:
     vals = sorted([v for v in df[field].dropna().unique().tolist() if str(v).strip() and str(v).lower() != "nan"])
-    selected_filter = col.multiselect(label, vals, key=f"filter_{field}")
+    selected_filter = col.multiselect(label, vals, key=f"filter_{field}_{reset_key}")
     if selected_filter:
         df = df[df[field].isin(selected_filter)]
 
-modo = st.radio("Modo de registro", ["Individual", "Grupal"], horizontal=True)
+modo = st.radio("Modo de registro", ["Individual", "Grupal", "Todos"], horizontal=True, key=f"modo_{reset_key}")
+
 if modo == "Individual":
-    selected = st.selectbox("Seleccionar docente", df["etiqueta"].tolist())
+    selected = st.selectbox("Seleccionar docente", df["etiqueta"].tolist(), key=f"doc_individual_{reset_key}")
     selected_labels = [selected] if selected else []
+elif modo == "Grupal":
+    selected_labels = st.multiselect("Seleccionar varios docentes", df["etiqueta"].tolist(), key=f"doc_grupal_{reset_key}")
 else:
-    selected_labels = st.multiselect("Seleccionar varios docentes", df["etiqueta"].tolist())
+    selected_labels = st.multiselect(
+        "Docentes seleccionados automáticamente. Puedes eliminar uno o varios antes de agregar.",
+        df["etiqueta"].tolist(),
+        default=df["etiqueta"].tolist(),
+        key=f"doc_todos_{reset_key}"
+    )
 
 st.markdown('<div class="card"><div class="step-title">PASO 3 — Marcar actividades realizadas</div><div class="small-note">Marca solo las actividades realizadas. Las no seleccionadas se guardarán automáticamente como “No”.</div></div>', unsafe_allow_html=True)
-selected_activities = st.multiselect("Actividades con respuesta Sí", activities)
+selected_activities = st.multiselect("Actividades con respuesta Sí", activities, key=f"activities_{reset_key}")
 
 col_add, col_reset = st.columns([1, 1])
 with col_add:
@@ -711,6 +804,7 @@ with col_add:
 with col_reset:
     if st.button("🧹 Limpiar registros agregados", use_container_width=True):
         st.session_state.records = []
+        st.session_state.reset_key += 1
         st.rerun()
 
 if add_clicked:
@@ -739,7 +833,9 @@ if add_clicked:
                 "actividades": activity_dict.copy(),
             })
             added += 1
-        st.success(f"Se agregaron {added} registro(s). Total acumulado: {len(st.session_state.records)}.")
+        st.session_state.last_add_message = f"Se agregaron {added} registro(s). Total acumulado: {len(st.session_state.records)}. Los campos de docentes y actividades quedaron limpios para un nuevo registro."
+        st.session_state.reset_key += 1
+        st.rerun()
 
 st.markdown('<div class="card"><div class="step-title">PASO 4 — ¿Agregar más o finalizar?</div><div class="small-note">Si necesitas más docentes o actividades, repite los pasos 1 a 3. Cuando termines, descarga el archivo final.</div></div>', unsafe_allow_html=True)
 
@@ -764,7 +860,7 @@ if records:
             use_container_width=True,
             type="primary",
         )
-        st.caption("El archivo descargado conserva la plantilla original y solo escribe en las columnas A a AG de la hoja de actividades.")
+        st.caption("El archivo descargado conserva la plantilla original, agrega validaciones estándar para los desplegables y solo escribe en las columnas A a AG de la hoja de actividades.")
     except Exception as e:
         st.error(f"No fue posible generar el archivo final: {e}")
 else:
