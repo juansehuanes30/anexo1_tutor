@@ -231,6 +231,61 @@ def css():
     .small-note {{ color: #5a4a68; font-size: .95rem; }}
     div[data-testid="stFileUploader"] section {{ background: rgba(255,255,255,.88); border-radius: 16px; }}
     .stButton button, .stDownloadButton button {{ border-radius: 14px; font-weight: 700; }}
+    .stButton button, .stDownloadButton button {{ border-radius: 14px; font-weight: 700; }}
+
+/* ===== MEJORAS DE CONTRASTE ===== */
+
+/* Textos generales */
+label, p, span, div, h1, h2, h3, h4 {{
+    color: #ffffff !important;
+}}
+
+/* Tarjetas blancas */
+.card {{
+    background: rgba(255,255,255,0.96) !important;
+    color: #2b003d !important;
+}}
+
+.card * {{
+    color: #2b003d !important;
+}}
+
+/* Inputs */
+.stTextInput label,
+.stSelectbox label,
+.stRadio label,
+.stFileUploader label {{
+    color: #ffffff !important;
+    font-weight: 700 !important;
+}}
+
+/* Radio buttons */
+.stRadio div {{
+    color: #ffffff !important;
+}}
+
+/* Texto de cargadores */
+.stFileUploader * {{
+    color: #2b003d !important;
+}}
+
+/* Alertas */
+.stAlert {{
+    background-color: #f3e8ff !important;
+    color: #2b003d !important;
+}}
+
+.stAlert * {{
+    color: #2b003d !important;
+}}
+
+/* Inputs internos */
+input, textarea {{
+    color: #2b003d !important;
+}}
+
+</style>
+""", unsafe_allow_html=True)
     </style>
     <div class="hero">
         <img src="data:image/png;base64,{logo_b64}" alt="PTAFI 3.0" />
