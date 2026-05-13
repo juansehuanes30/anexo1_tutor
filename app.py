@@ -315,143 +315,82 @@ def set_cell_value(cell, value, numeric=False):
 
 
 def write_records_to_template(template_bytes, records):
-    """Escribe únicamente valores en el XML de la hoja, conservando validaciones, listas y estructura.
+    """Escribe los registros usando openpyxl para generar un .xlsx válido.
 
-    A diferencia de guardar con openpyxl, este método no reescribe el libro completo ni elimina
-    validaciones extendidas de Excel. Por eso se mantienen las listas desplegables de A, D-H y K-AG.
+    Esta versión prioriza que Excel abra el archivo sin reparación. Se carga la plantilla
+    original, se escriben únicamente las celdas A:AG de la hoja de actividades y se guarda
+    nuevamente conservando hojas, formatos, listas desplegables, hoja oculta y estructura.
     """
     if len(records) > MAX_ROWS:
         raise ValueError(f"La plantilla solo permite {MAX_ROWS} registros.")
 
+    wb = load_workbook(io.BytesIO(template_bytes), data_only=False)
+    ws = get_worksheet(wb)
     allowed = get_allowed_lists(template_bytes)
-    sheet_path = find_activity_sheet_path(template_bytes)
 
-    # Registrar namespaces para conservar prefijos comunes.
-    ET.register_namespace('', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main')
-    ET.register_namespace('r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships')
-    ET.register_namespace('xdr', 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing')
-    ET.register_namespace('x14', 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main')
-    ET.register_namespace('mc', 'http://schemas.openxmlformats.org/markup-compatibility/2006')
-    ET.register_namespace('x14ac', 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac')
-    ET.register_namespace('xr', 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision')
-    ET.register_namespace('xr2', 'http://schemas.microsoft.com/office/spreadsheetml/2015/revision2')
-    ET.register_namespace('xr3', 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision3')
+    def safe_int(value):
+        digits = clean_dane(value)
+        if not digits:
+            return None
+        try:
+            return int(digits)
+        except Exception:
+            return digits
 
-    with zipfile.ZipFile(io.BytesIO(template_bytes), "r") as zin:
-        sheet_xml = zin.read(sheet_path)
-        root = ET.fromstring(sheet_xml)
-        ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-        sheet_data = root.find("m:sheetData", ns)
-        if sheet_data is None:
-            raise ValueError("La hoja de actividades no contiene sheetData.")
+    def write_cell(row_num, col_num, value, numeric=False):
+        cell = ws.cell(row=row_num, column=col_num)
+        if value in (None, ""):
+            cell.value = None
+            return
+        if numeric:
+            cell.value = safe_int(value)
+            cell.number_format = "0"
+        else:
+            cell.value = str(value).strip()
 
-        # Índices de filas y celdas existentes.
-        rows = {int(row.attrib.get("r")): row for row in sheet_data.findall("m:row", ns)}
-        row2 = rows.get(DATA_START_ROW)
-        base_attrs = {}
-        if row2 is not None:
-            for c in row2.findall("m:c", ns):
-                _, col_idx = split_ref(c.attrib.get("r", ""))
-                if FIRST_COL <= col_idx <= LAST_COL:
-                    base_attrs[col_idx] = {k: v for k, v in c.attrib.items() if k != "r"}
+    # Limpiar únicamente contenido A:AG de las filas de registro; no se eliminan filas,
+    # estilos, validaciones, formatos ni listas desplegables.
+    for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
+        for col in range(FIRST_COL, LAST_COL + 1):
+            ws.cell(row=row_num, column=col).value = None
 
-        def get_or_create_row(row_num):
-            row = rows.get(row_num)
-            if row is not None:
-                return row
-            row = ET.Element("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row", {"r": str(row_num), "spans": "1:33"})
-            # Insertar en orden.
-            inserted = False
-            for i, existing in enumerate(list(sheet_data)):
-                if int(existing.attrib.get("r", 0)) > row_num:
-                    sheet_data.insert(i, row)
-                    inserted = True
-                    break
-            if not inserted:
-                sheet_data.append(row)
-            rows[row_num] = row
-            return row
+    # Escribir registros.
+    for offset, record in enumerate(records):
+        row_num = DATA_START_ROW + offset
+        activity_values = record.get("actividades", {})
 
-        def get_or_create_cell(row, row_num, col_num):
-            ref = cell_ref(row_num, col_num)
-            existing_cells = row.findall("m:c", ns)
-            for c in existing_cells:
-                if c.attrib.get("r") == ref:
-                    return c
-            attrs = {"r": ref}
-            attrs.update(base_attrs.get(col_num, {}))
-            c = ET.Element("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c", attrs)
-            inserted = False
-            for i, existing in enumerate(existing_cells):
-                _, ec = split_ref(existing.attrib.get("r", ""))
-                if ec > col_num:
-                    row.insert(i, c)
-                    inserted = True
-                    break
-            if not inserted:
-                row.append(c)
-            return c
+        base_values = {
+            1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
+            2: record.get("nombre", ""),
+            3: record.get("cedula", ""),
+            4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
+            5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
+            6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
+            7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
+            8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
+            9: clean_dane(record.get("dane_ee", "")),
+            10: clean_dane(record.get("dane_sede", "")),
+        }
 
-        # Limpiar y reescribir A:AG manteniendo estilos. Las filas no usadas quedan vacías.
-        for offset in range(MAX_ROWS):
-            row_num = DATA_START_ROW + offset
-            row = get_or_create_row(row_num)
-            record = records[offset] if offset < len(records) else None
-            if record:
-                activity_values = record.get("actividades", {})
-                base_values = {
-                    1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
-                    2: record.get("nombre", ""),
-                    3: record.get("cedula", ""),
-                    4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
-                    5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
-                    6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
-                    7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
-                    8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
-                    9: clean_dane(record.get("dane_ee", "")),
-                    10: clean_dane(record.get("dane_sede", "")),
-                }
-            else:
-                activity_values = {}
-                base_values = {}
+        for col in range(1, 11):
+            # C, I y J se escriben como número para evitar el aviso verde de Excel.
+            write_cell(row_num, col, base_values.get(col, ""), numeric=(col in {3, 9, 10}))
 
-            for col in range(FIRST_COL, LAST_COL + 1):
-                c = get_or_create_cell(row, row_num, col)
-                if not record:
-                    set_cell_value(c, "")
-                    continue
-                if col <= 10:
-                    # C, I y J quedan como número para evitar el aviso verde de Excel.
-                    set_cell_value(c, base_values.get(col, ""), numeric=(col in {3, 9, 10}))
-                else:
-                    # Usar el texto exacto de la lista desplegable: normalmente Si/No.
-                    header = ""
-                    # Los encabezados se leen desde la fila 1 del mismo XML.
-                    header_cell = None
-                    header_row = rows.get(1)
-                    if header_row is not None:
-                        for hc in header_row.findall("m:c", ns):
-                            if hc.attrib.get("r") == cell_ref(1, col):
-                                header_cell = hc
-                                break
-                    # Para encabezados con sharedStrings no es necesario aquí: el diccionario ya viene de openpyxl por nombre.
-                    # Se identifica por posición dentro de activities.
-                    idx = col - ACTIVITY_START_COL
-                    header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
-                    val = activity_values.get(header, NO)
-                    val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
-                    set_cell_value(c, val, numeric=False)
+        for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
+            idx = col - ACTIVITY_START_COL
+            header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
+            val = activity_values.get(header, NO)
+            val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
+            write_cell(row_num, col, val, numeric=False)
 
-        new_sheet_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    # Mantener la hoja Listas oculta si así venía en la plantilla.
+    if "Listas" in wb.sheetnames:
+        wb["Listas"].sheet_state = "hidden"
 
-        output = io.BytesIO()
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                data = new_sheet_xml if item.filename == sheet_path else zin.read(item.filename)
-                zout.writestr(item, data)
+    output = io.BytesIO()
+    wb.save(output)
     output.seek(0)
     return output.getvalue()
-
 
 def css():
     logo_b64 = img_to_base64(LOGO_PATH)
