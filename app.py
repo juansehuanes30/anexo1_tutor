@@ -4,6 +4,8 @@ import re
 import unicodedata
 from copy import copy
 from pathlib import Path
+import zipfile
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 import streamlit as st
@@ -19,7 +21,7 @@ FIRST_COL = 1
 LAST_COL = 33  # AG
 ACTIVITY_START_COL = 11  # K
 ACTIVITY_END_COL = 33  # AG
-SI = "Sí"
+SI = "Si"
 NO = "No"
 
 st.set_page_config(page_title=APP_TITLE, page_icon="📘", layout="wide")
@@ -185,10 +187,58 @@ def validation_options_for_cell(wb, ws, cell_coord):
     return []
 
 
+def list_values_from_hidden_sheet(wb, header_name):
+    """Obtiene opciones desde la hoja oculta 'Listas' usando el encabezado dado."""
+    if "Listas" not in wb.sheetnames:
+        return []
+    ws = wb["Listas"]
+    target = slug(header_name)
+    col_idx = None
+    for cell in ws[1]:
+        if slug(cell.value) == target:
+            col_idx = cell.column
+            break
+    if col_idx is None:
+        return []
+    vals = []
+    for row in range(2, ws.max_row + 1):
+        value = ws.cell(row=row, column=col_idx).value
+        if value not in (None, ""):
+            vals.append(str(value).strip())
+    return vals
+
+
+def get_allowed_lists(template_bytes):
+    """Lee listas esperadas sin guardar el archivo; así no elimina validaciones extendidas."""
+    wb = load_workbook(io.BytesIO(template_bytes), data_only=True)
+    return {
+        "semana": list_values_from_hidden_sheet(wb, "Semana de acompañamiento"),
+        "genero": list_values_from_hidden_sheet(wb, "Género"),
+        "jornada": list_values_from_hidden_sheet(wb, "JORNADA"),
+        "cargo": list_values_from_hidden_sheet(wb, "CARGO"),
+        "grado": list_values_from_hidden_sheet(wb, "GRADO"),
+        "nivel": list_values_from_hidden_sheet(wb, "Nivel_Enseñanza"),
+        "valor": list_values_from_hidden_sheet(wb, "Valor") or [SI, NO],
+    }
+
+
+def normalize_to_allowed(value, allowed):
+    """Ajusta un valor de la base al texto exacto de la lista desplegable de la plantilla."""
+    if value in (None, ""):
+        return ""
+    text = str(value).strip()
+    if not allowed:
+        return text
+    lookup = {slug(x): x for x in allowed}
+    return lookup.get(slug(text), text)
+
+
 def get_template_metadata(template_bytes):
-    wb = load_workbook(io.BytesIO(template_bytes))
+    # Se usa openpyxl solo para leer encabezados y listas; no se guarda con openpyxl.
+    wb = load_workbook(io.BytesIO(template_bytes), data_only=True)
     ws = get_worksheet(wb)
-    weeks = validation_options_for_cell(wb, ws, "A2") or [f"Semana {i}" for i in range(1, 9)]
+    allowed = get_allowed_lists(template_bytes)
+    weeks = allowed.get("semana") or validation_options_for_cell(wb, ws, "A2") or [f"Semana {i}" for i in range(1, 9)]
     activities = []
     for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
         header = ws.cell(row=1, column=col).value
@@ -196,40 +246,209 @@ def get_template_metadata(template_bytes):
     return ws.title, weeks, activities
 
 
-def clear_writable_area(ws):
-    for row in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
-        for col in range(FIRST_COL, LAST_COL + 1):
-            ws.cell(row=row, column=col).value = None
+def col_to_letter(col):
+    letters = ""
+    while col:
+        col, rem = divmod(col - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def cell_ref(row, col):
+    return f"{col_to_letter(col)}{row}"
+
+
+def split_ref(ref):
+    m = re.match(r"([A-Z]+)(\d+)", ref)
+    if not m:
+        return 0, 0
+    letters, row = m.groups()
+    col = 0
+    for ch in letters:
+        col = col * 26 + (ord(ch) - 64)
+    return int(row), col
+
+
+def find_activity_sheet_path(template_bytes):
+    """Localiza el XML de la hoja de actividades dentro del .xlsx sin alterar el paquete."""
+    with zipfile.ZipFile(io.BytesIO(template_bytes), "r") as zin:
+        wb_xml = zin.read("xl/workbook.xml")
+        rels_xml = zin.read("xl/_rels/workbook.xml.rels")
+    ns_main = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+               "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+    wb_root = ET.fromstring(wb_xml)
+    rels_root = ET.fromstring(rels_xml)
+    rel_map = {}
+    for rel in rels_root:
+        rid = rel.attrib.get("Id")
+        target = rel.attrib.get("Target", "")
+        if rid and target:
+            rel_map[rid] = "xl/" + target.lstrip("/") if not target.startswith("xl/") else target
+    for sheet in wb_root.findall("m:sheets/m:sheet", ns_main):
+        name = sheet.attrib.get("name", "")
+        if name in SHEET_CANDIDATES:
+            rid = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+            return rel_map[rid]
+    raise ValueError(f"No se encontró la hoja {SHEET_CANDIDATES} dentro del archivo.")
+
+
+def set_cell_value(cell, value, numeric=False):
+    """Escribe valor en un nodo <c> conservando atributos como estilo. Vacío deja solo formato."""
+    # Limpiar hijos existentes y atributos de tipo
+    for child in list(cell):
+        cell.remove(child)
+    cell.attrib.pop("t", None)
+    cell.attrib.pop("cm", None)
+    cell.attrib.pop("vm", None)
+    if value in (None, ""):
+        return
+    if numeric:
+        cleaned = clean_dane(value)
+        if cleaned:
+            v = ET.SubElement(cell, "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
+            v.text = cleaned
+        return
+    cell.set("t", "inlineStr")
+    is_node = ET.SubElement(cell, "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is")
+    t_node = ET.SubElement(is_node, "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
+    t_node.text = str(value)
 
 
 def write_records_to_template(template_bytes, records):
-    wb = load_workbook(io.BytesIO(template_bytes))
-    ws = get_worksheet(wb)
-    clear_writable_area(ws)
+    """Escribe únicamente valores en el XML de la hoja, conservando validaciones, listas y estructura.
+
+    A diferencia de guardar con openpyxl, este método no reescribe el libro completo ni elimina
+    validaciones extendidas de Excel. Por eso se mantienen las listas desplegables de A, D-H y K-AG.
+    """
     if len(records) > MAX_ROWS:
         raise ValueError(f"La plantilla solo permite {MAX_ROWS} registros.")
-    for offset, record in enumerate(records):
-        row = DATA_START_ROW + offset
-        values = [
-            record.get("semana", ""),
-            record.get("nombre", ""),
-            record.get("cedula", ""),
-            record.get("genero", ""),
-            record.get("jornada", ""),
-            record.get("cargo", ""),
-            record.get("grado", ""),
-            record.get("nivel", ""),
-            record.get("dane_ee", ""),
-            record.get("dane_sede", ""),
-        ]
-        for idx, value in enumerate(values, start=1):
-            ws.cell(row=row, column=idx).value = value
-        activity_values = record.get("actividades", {})
-        for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
-            header = str(ws.cell(row=1, column=col).value or f"Actividad columna {col}").strip()
-            ws.cell(row=row, column=col).value = activity_values.get(header, NO)
-    output = io.BytesIO()
-    wb.save(output)
+
+    allowed = get_allowed_lists(template_bytes)
+    sheet_path = find_activity_sheet_path(template_bytes)
+
+    # Registrar namespaces para conservar prefijos comunes.
+    ET.register_namespace('', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main')
+    ET.register_namespace('r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships')
+    ET.register_namespace('xdr', 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing')
+    ET.register_namespace('x14', 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/main')
+    ET.register_namespace('mc', 'http://schemas.openxmlformats.org/markup-compatibility/2006')
+    ET.register_namespace('x14ac', 'http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac')
+    ET.register_namespace('xr', 'http://schemas.microsoft.com/office/spreadsheetml/2014/revision')
+    ET.register_namespace('xr2', 'http://schemas.microsoft.com/office/spreadsheetml/2015/revision2')
+    ET.register_namespace('xr3', 'http://schemas.microsoft.com/office/spreadsheetml/2016/revision3')
+
+    with zipfile.ZipFile(io.BytesIO(template_bytes), "r") as zin:
+        sheet_xml = zin.read(sheet_path)
+        root = ET.fromstring(sheet_xml)
+        ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        sheet_data = root.find("m:sheetData", ns)
+        if sheet_data is None:
+            raise ValueError("La hoja de actividades no contiene sheetData.")
+
+        # Índices de filas y celdas existentes.
+        rows = {int(row.attrib.get("r")): row for row in sheet_data.findall("m:row", ns)}
+        row2 = rows.get(DATA_START_ROW)
+        base_attrs = {}
+        if row2 is not None:
+            for c in row2.findall("m:c", ns):
+                _, col_idx = split_ref(c.attrib.get("r", ""))
+                if FIRST_COL <= col_idx <= LAST_COL:
+                    base_attrs[col_idx] = {k: v for k, v in c.attrib.items() if k != "r"}
+
+        def get_or_create_row(row_num):
+            row = rows.get(row_num)
+            if row is not None:
+                return row
+            row = ET.Element("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row", {"r": str(row_num), "spans": "1:33"})
+            # Insertar en orden.
+            inserted = False
+            for i, existing in enumerate(list(sheet_data)):
+                if int(existing.attrib.get("r", 0)) > row_num:
+                    sheet_data.insert(i, row)
+                    inserted = True
+                    break
+            if not inserted:
+                sheet_data.append(row)
+            rows[row_num] = row
+            return row
+
+        def get_or_create_cell(row, row_num, col_num):
+            ref = cell_ref(row_num, col_num)
+            existing_cells = row.findall("m:c", ns)
+            for c in existing_cells:
+                if c.attrib.get("r") == ref:
+                    return c
+            attrs = {"r": ref}
+            attrs.update(base_attrs.get(col_num, {}))
+            c = ET.Element("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c", attrs)
+            inserted = False
+            for i, existing in enumerate(existing_cells):
+                _, ec = split_ref(existing.attrib.get("r", ""))
+                if ec > col_num:
+                    row.insert(i, c)
+                    inserted = True
+                    break
+            if not inserted:
+                row.append(c)
+            return c
+
+        # Limpiar y reescribir A:AG manteniendo estilos. Las filas no usadas quedan vacías.
+        for offset in range(MAX_ROWS):
+            row_num = DATA_START_ROW + offset
+            row = get_or_create_row(row_num)
+            record = records[offset] if offset < len(records) else None
+            if record:
+                activity_values = record.get("actividades", {})
+                base_values = {
+                    1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
+                    2: record.get("nombre", ""),
+                    3: record.get("cedula", ""),
+                    4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
+                    5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
+                    6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
+                    7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
+                    8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
+                    9: clean_dane(record.get("dane_ee", "")),
+                    10: clean_dane(record.get("dane_sede", "")),
+                }
+            else:
+                activity_values = {}
+                base_values = {}
+
+            for col in range(FIRST_COL, LAST_COL + 1):
+                c = get_or_create_cell(row, row_num, col)
+                if not record:
+                    set_cell_value(c, "")
+                    continue
+                if col <= 10:
+                    # C, I y J quedan como número para evitar el aviso verde de Excel.
+                    set_cell_value(c, base_values.get(col, ""), numeric=(col in {3, 9, 10}))
+                else:
+                    # Usar el texto exacto de la lista desplegable: normalmente Si/No.
+                    header = ""
+                    # Los encabezados se leen desde la fila 1 del mismo XML.
+                    header_cell = None
+                    header_row = rows.get(1)
+                    if header_row is not None:
+                        for hc in header_row.findall("m:c", ns):
+                            if hc.attrib.get("r") == cell_ref(1, col):
+                                header_cell = hc
+                                break
+                    # Para encabezados con sharedStrings no es necesario aquí: el diccionario ya viene de openpyxl por nombre.
+                    # Se identifica por posición dentro de activities.
+                    idx = col - ACTIVITY_START_COL
+                    header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
+                    val = activity_values.get(header, NO)
+                    val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
+                    set_cell_value(c, val, numeric=False)
+
+        new_sheet_xml = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = new_sheet_xml if item.filename == sheet_path else zin.read(item.filename)
+                zout.writestr(item, data)
     output.seek(0)
     return output.getvalue()
 
