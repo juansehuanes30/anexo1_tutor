@@ -314,81 +314,112 @@ def set_cell_value(cell, value, numeric=False):
     t_node.text = str(value)
 
 
-def write_records_to_template(template_bytes, records):
-    """Escribe los registros usando openpyxl para generar un .xlsx válido.
+def xml_escape_text(value) -> str:
+    from xml.sax.saxutils import escape
+    return escape(str(value), {"\"": "&quot;"})
 
-    Esta versión prioriza que Excel abra el archivo sin reparación. Se carga la plantilla
-    original, se escriben únicamente las celdas A:AG de la hoja de actividades y se guarda
-    nuevamente conservando hojas, formatos, listas desplegables, hoja oculta y estructura.
+
+def replace_cell_xml(sheet_xml: str, ref: str, value, numeric: bool = False) -> str:
+    """Reemplaza únicamente el contenido de una celda existente, preservando atributos/estilos.
+
+    Se usa edición textual del XML para no reserializar la hoja completa. Así se conservan
+    exactamente las validaciones extendidas x14, las listas desplegables, la hoja oculta,
+    comentarios, relaciones y demás estructura del archivo original.
+    """
+    pattern = re.compile(
+        rf'<c\b(?=[^>]*\br="{re.escape(ref)}")([^>]*)>(.*?)</c>|<c\b(?=[^>]*\br="{re.escape(ref)}")([^>]*)/>',
+        re.DOTALL,
+    )
+
+    def build(attrs: str) -> str:
+        # Quitar tipo anterior, pero conservar estilo, referencia y demás atributos seguros.
+        attrs_clean = re.sub(r'\s+t="[^"]*"', '', attrs)
+        if value in (None, ""):
+            return f'<c{attrs_clean}/>'
+        if numeric:
+            digits = clean_dane(value)
+            if not digits:
+                return f'<c{attrs_clean}/>'
+            return f'<c{attrs_clean}><v>{digits}</v></c>'
+        text = xml_escape_text(value)
+        return f'<c{attrs_clean} t="inlineStr"><is><t>{text}</t></is></c>'
+
+    def repl(match):
+        attrs = match.group(1) if match.group(1) is not None else match.group(3)
+        return build(attrs)
+
+    new_xml, count = pattern.subn(repl, sheet_xml, count=1)
+    if count == 0:
+        # La plantilla oficial trae las celdas A:AG hasta la fila 501. Si alguna no existe,
+        # no insertamos filas/celdas para evitar tocar la estructura XML.
+        return sheet_xml
+    return new_xml
+
+
+def write_records_to_template(template_bytes, records):
+    """Escribe registros sobre la plantilla sin corromper XML y conservando listas desplegables.
+
+    Esta versión no usa pandas.to_excel ni guarda el libro completo con openpyxl. Edita solo
+    los valores de las celdas A:AG ya existentes en la hoja de actividades. Como no reserializa
+    la hoja completa, se mantienen intactas las validaciones x14 de Excel usadas por las listas
+    desplegables de A, D-H y K-AG.
     """
     if len(records) > MAX_ROWS:
         raise ValueError(f"La plantilla solo permite {MAX_ROWS} registros.")
 
-    wb = load_workbook(io.BytesIO(template_bytes), data_only=False)
-    ws = get_worksheet(wb)
     allowed = get_allowed_lists(template_bytes)
+    sheet_path = find_activity_sheet_path(template_bytes)
 
-    def safe_int(value):
-        digits = clean_dane(value)
-        if not digits:
-            return None
-        try:
-            return int(digits)
-        except Exception:
-            return digits
+    with zipfile.ZipFile(io.BytesIO(template_bytes), "r") as zin:
+        original_sheet_xml = zin.read(sheet_path).decode("utf-8")
+        sheet_xml = original_sheet_xml
 
-    def write_cell(row_num, col_num, value, numeric=False):
-        cell = ws.cell(row=row_num, column=col_num)
-        if value in (None, ""):
-            cell.value = None
-            return
-        if numeric:
-            cell.value = safe_int(value)
-            cell.number_format = "0"
-        else:
-            cell.value = str(value).strip()
+        # Limpiar todas las celdas diligenciables existentes A:AG, filas 2:501,
+        # conservando estilos y validaciones de la plantilla.
+        for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
+            for col in range(FIRST_COL, LAST_COL + 1):
+                sheet_xml = replace_cell_xml(sheet_xml, cell_ref(row_num, col), "", numeric=False)
 
-    # Limpiar únicamente contenido A:AG de las filas de registro; no se eliminan filas,
-    # estilos, validaciones, formatos ni listas desplegables.
-    for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
-        for col in range(FIRST_COL, LAST_COL + 1):
-            ws.cell(row=row_num, column=col).value = None
+        # Escribir registros celda por celda.
+        for offset, record in enumerate(records):
+            row_num = DATA_START_ROW + offset
+            activity_values = record.get("actividades", {})
+            base_values = {
+                1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
+                2: record.get("nombre", ""),
+                3: record.get("cedula", ""),
+                4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
+                5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
+                6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
+                7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
+                8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
+                9: clean_dane(record.get("dane_ee", "")),
+                10: clean_dane(record.get("dane_sede", "")),
+            }
 
-    # Escribir registros.
-    for offset, record in enumerate(records):
-        row_num = DATA_START_ROW + offset
-        activity_values = record.get("actividades", {})
+            for col in range(1, 11):
+                # C, I y J como número para evitar el aviso verde de Excel.
+                # La estructura de la plantilla y sus validaciones se conserva.
+                sheet_xml = replace_cell_xml(
+                    sheet_xml,
+                    cell_ref(row_num, col),
+                    base_values.get(col, ""),
+                    numeric=(col in {3, 9, 10}),
+                )
 
-        base_values = {
-            1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
-            2: record.get("nombre", ""),
-            3: record.get("cedula", ""),
-            4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
-            5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
-            6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
-            7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
-            8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
-            9: clean_dane(record.get("dane_ee", "")),
-            10: clean_dane(record.get("dane_sede", "")),
-        }
+            for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
+                idx = col - ACTIVITY_START_COL
+                header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
+                val = activity_values.get(header, NO)
+                val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
+                sheet_xml = replace_cell_xml(sheet_xml, cell_ref(row_num, col), val, numeric=False)
 
-        for col in range(1, 11):
-            # C, I y J se escriben como número para evitar el aviso verde de Excel.
-            write_cell(row_num, col, base_values.get(col, ""), numeric=(col in {3, 9, 10}))
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = sheet_xml.encode("utf-8") if item.filename == sheet_path else zin.read(item.filename)
+                zout.writestr(item, data)
 
-        for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
-            idx = col - ACTIVITY_START_COL
-            header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
-            val = activity_values.get(header, NO)
-            val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
-            write_cell(row_num, col, val, numeric=False)
-
-    # Mantener la hoja Listas oculta si así venía en la plantilla.
-    if "Listas" in wb.sheetnames:
-        wb["Listas"].sheet_state = "hidden"
-
-    output = io.BytesIO()
-    wb.save(output)
     output.seek(0)
     return output.getvalue()
 
