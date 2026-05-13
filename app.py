@@ -200,92 +200,185 @@ def css():
     logo_b64 = img_to_base64(LOGO_PATH)
     st.markdown(f"""
     <style>
+    :root {{
+        --morado-oscuro: #250034;
+        --morado: #5b107a;
+        --fucsia: #a227b5;
+        --texto-oscuro: #21122f;
+        --tarjeta: rgba(255,255,255,.96);
+    }}
+
     .stApp {{
-        background: linear-gradient(135deg, #290040 0%, #5b107a 45%, #a227b5 100%);
+        background: linear-gradient(135deg, #250034 0%, #5b107a 45%, #a227b5 100%);
         color: #ffffff;
     }}
-    [data-testid="stHeader"] {{ background: rgba(0,0,0,0); }}
-    .main .block-container {{ padding-top: 1rem; max-width: 1250px; }}
+
+    [data-testid="stHeader"] {{
+        background: rgba(0,0,0,0);
+    }}
+
+    .main .block-container {{
+        padding-top: 1rem;
+        max-width: 1250px;
+    }}
+
     .hero {{
         background: radial-gradient(circle at top, rgba(255, 126, 221, .38), rgba(32, 0, 55, .72)), linear-gradient(120deg, #2d004d, #7a1b98);
-        border: 1px solid rgba(255,255,255,.20);
+        border: 1px solid rgba(255,255,255,.22);
         border-radius: 28px;
-        padding: 28px 28px 22px;
+        padding: 30px 28px 24px;
         text-align: center;
         box-shadow: 0 18px 45px rgba(0,0,0,.28);
-        margin-bottom: 20px;
+        margin-bottom: 22px;
     }}
-    .hero img {{ max-height: 150px; margin-bottom: 8px; }}
-    .hero h1 {{ font-size: 3.1rem; margin: 0; color: #fff; text-shadow: 0 3px 8px rgba(0,0,0,.25); }}
-    .hero p {{ font-size: 1.15rem; color: #f6e9ff; margin-top: 8px; }}
+
+    .hero img {{
+        max-height: 150px;
+        margin-bottom: 8px;
+    }}
+
+    .hero h1 {{
+        font-size: 3.1rem;
+        margin: 0;
+        color: #ffffff !important;
+        text-shadow: 0 3px 8px rgba(0,0,0,.25);
+        font-weight: 900;
+    }}
+
+    .hero p {{
+        font-size: 1.15rem;
+        color: #f8ecff !important;
+        margin-top: 8px;
+        font-weight: 600;
+    }}
+
     .card {{
-        background: rgba(255,255,255,.93);
-        color: #21122f;
+        background: var(--tarjeta);
+        color: var(--texto-oscuro) !important;
         border-radius: 22px;
         padding: 22px;
-        border: 1px solid rgba(255,255,255,.45);
+        border: 1px solid rgba(255,255,255,.55);
         box-shadow: 0 14px 35px rgba(0,0,0,.20);
-        margin-bottom: 16px;
+        margin-bottom: 18px;
     }}
-    .step-title {{ font-size: 1.35rem; font-weight: 800; color: #3f0758; margin-bottom: 6px; }}
-    .small-note {{ color: #5a4a68; font-size: .95rem; }}
-    div[data-testid="stFileUploader"] section {{ background: rgba(255,255,255,.88); border-radius: 16px; }}
-    .stButton button, .stDownloadButton button {{ border-radius: 14px; font-weight: 700; }}
-    .stButton button, .stDownloadButton button {{ border-radius: 14px; font-weight: 700; }}
 
-/* ===== MEJORAS DE CONTRASTE ===== */
+    .card * {{
+        color: var(--texto-oscuro) !important;
+    }}
 
-/* Textos generales */
-label, p, span, div, h1, h2, h3, h4 {{
-    color: #ffffff !important;
-}}
+    .step-title {{
+        font-size: 1.35rem;
+        font-weight: 900;
+        color: #3f0758 !important;
+        margin-bottom: 6px;
+    }}
 
-/* Tarjetas blancas */
-.card {{
-    background: rgba(255,255,255,0.96) !important;
-    color: #2b003d !important;
-}}
+    .small-note {{
+        color: #4d365f !important;
+        font-size: .98rem;
+        font-weight: 500;
+    }}
 
-.card * {{
-    color: #2b003d !important;
-}}
+    /* Texto general sobre el fondo morado */
+    h1, h2, h3, h4, h5, h6,
+    .stMarkdown, .stMarkdown p,
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li {{
+        color: #ffffff;
+    }}
 
-/* Inputs */
-.stTextInput label,
-.stSelectbox label,
-.stRadio label,
-.stFileUploader label {{
-    color: #ffffff !important;
-    font-weight: 700 !important;
-}}
+    /* Títulos de Streamlit */
+    h2, h3 {{
+        color: #ffffff !important;
+        font-weight: 900 !important;
+        text-shadow: 0 2px 6px rgba(0,0,0,.25);
+    }}
 
-/* Radio buttons */
-.stRadio div {{
-    color: #ffffff !important;
-}}
+    /* Etiquetas de inputs, selectbox, radio, multiselect y uploader */
+    .stTextInput label,
+    .stSelectbox label,
+    .stMultiSelect label,
+    .stRadio label,
+    .stFileUploader label,
+    .stTextArea label,
+    [data-testid="stWidgetLabel"] p {{
+        color: #ffffff !important;
+        font-weight: 800 !important;
+    }}
 
-/* Texto de cargadores */
-.stFileUploader * {{
-    color: #2b003d !important;
-}}
+    /* Opciones de radio y textos auxiliares sobre fondo morado */
+    .stRadio [role="radiogroup"] label,
+    .stRadio [role="radiogroup"] span,
+    .stRadio [role="radiogroup"] p {{
+        color: #ffffff !important;
+        font-weight: 700 !important;
+    }}
 
-/* Alertas */
-.stAlert {{
-    background-color: #f3e8ff !important;
-    color: #2b003d !important;
-}}
+    /* Campos de entrada: texto oscuro sobre caja clara */
+    input, textarea,
+    [data-baseweb="input"] input,
+    [data-baseweb="select"] div,
+    [data-baseweb="textarea"] textarea {{
+        color: #21122f !important;
+        caret-color: #21122f !important;
+    }}
 
-.stAlert * {{
-    color: #2b003d !important;
-}}
+    /* Selectbox y multiselect */
+    [data-baseweb="select"] {{
+        background-color: #ffffff !important;
+        border-radius: 12px !important;
+    }}
 
-/* Inputs internos */
-input, textarea {{
-    color: #2b003d !important;
-}}
+    [data-baseweb="select"] * {{
+        color: #21122f !important;
+    }}
 
-</style>
-""", unsafe_allow_html=True)
+    /* Uploader */
+    div[data-testid="stFileUploader"] section {{
+        background: rgba(255,255,255,.94) !important;
+        border-radius: 16px !important;
+        border: 1px solid rgba(255,255,255,.70) !important;
+    }}
+
+    div[data-testid="stFileUploader"] section * {{
+        color: #21122f !important;
+    }}
+
+    /* Alertas */
+    [data-testid="stAlert"] {{
+        background-color: #f3e8ff !important;
+        border: 1px solid rgba(255,255,255,.65) !important;
+        border-radius: 14px !important;
+    }}
+
+    [data-testid="stAlert"] * {{
+        color: #21122f !important;
+        font-weight: 600 !important;
+    }}
+
+    /* Métricas y tablas */
+    [data-testid="stMetric"] {{
+        background: rgba(255,255,255,.94);
+        border-radius: 16px;
+        padding: 14px;
+    }}
+
+    [data-testid="stMetric"] * {{
+        color: #21122f !important;
+    }}
+
+    /* Botones */
+    .stButton button, .stDownloadButton button {{
+        border-radius: 14px;
+        font-weight: 800;
+        min-height: 44px;
+    }}
+
+    /* Captions */
+    .stCaptionContainer, .stCaptionContainer p {{
+        color: #f8ecff !important;
+        font-weight: 600;
+    }}
     </style>
     <div class="hero">
         <img src="data:image/png;base64,{logo_b64}" alt="PTAFI 3.0" />
