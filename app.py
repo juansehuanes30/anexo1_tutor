@@ -357,12 +357,11 @@ def replace_cell_xml(sheet_xml: str, ref: str, value, numeric: bool = False) -> 
 
 
 def write_records_to_template(template_bytes, records):
-    """Escribe registros sobre la plantilla sin corromper XML y conservando listas desplegables.
+    """Escribe registros sobre la plantilla de forma rápida y segura.
 
-    Esta versión no usa pandas.to_excel ni guarda el libro completo con openpyxl. Edita solo
-    los valores de las celdas A:AG ya existentes en la hoja de actividades. Como no reserializa
-    la hoja completa, se mantienen intactas las validaciones x14 de Excel usadas por las listas
-    desplegables de A, D-H y K-AG.
+    No usa pandas.to_excel, no inserta filas y no reserializa todo el libro con openpyxl.
+    Edita el XML de la hoja de actividades en una sola pasada, conservando intactas las
+    validaciones/listas desplegables, la hoja oculta y la estructura original del Anexo 1.
     """
     if len(records) > MAX_ROWS:
         raise ValueError(f"La plantilla solo permite {MAX_ROWS} registros.")
@@ -370,49 +369,77 @@ def write_records_to_template(template_bytes, records):
     allowed = get_allowed_lists(template_bytes)
     sheet_path = find_activity_sheet_path(template_bytes)
 
+    # 1) Construir mapa de valores para A:AG, filas 2:501.
+    #    Las filas sobrantes quedan limpias, sin tocar estilos ni validaciones.
+    values = {}
+    numeric_cells = set()
+
+    for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
+        for col in range(FIRST_COL, LAST_COL + 1):
+            ref = cell_ref(row_num, col)
+            values[ref] = ""
+
+    for offset, record in enumerate(records):
+        row_num = DATA_START_ROW + offset
+        activity_values = record.get("actividades", {})
+        base_values = {
+            1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
+            2: record.get("nombre", ""),
+            3: clean_dane(record.get("cedula", "")),
+            4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
+            5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
+            6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
+            7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
+            8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
+            9: clean_dane(record.get("dane_ee", "")),
+            10: clean_dane(record.get("dane_sede", "")),
+        }
+
+        for col in range(1, 11):
+            ref = cell_ref(row_num, col)
+            values[ref] = base_values.get(col, "")
+            if col in {3, 9, 10}:
+                numeric_cells.add(ref)
+
+        for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
+            idx = col - ACTIVITY_START_COL
+            header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
+            val = activity_values.get(header, NO)
+            val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
+            values[cell_ref(row_num, col)] = val
+
+    def build_cell(attrs: str, value, numeric: bool) -> str:
+        # Conserva r="...", s="..." y otros atributos seguros. Solo quita t="..." cuando se reescribe.
+        attrs_clean = re.sub(r'\s+t="[^"]*"', '', attrs)
+        attrs_clean = re.sub(r'\s+cm="[^"]*"', '', attrs_clean)
+        attrs_clean = re.sub(r'\s+vm="[^"]*"', '', attrs_clean)
+        if value in (None, ""):
+            return f'<c{attrs_clean}/>'
+        if numeric:
+            digits = clean_dane(value)
+            if not digits:
+                return f'<c{attrs_clean}/>'
+            return f'<c{attrs_clean}><v>{digits}</v></c>'
+        text = xml_escape_text(value)
+        return f'<c{attrs_clean} t="inlineStr"><is><t>{text}</t></is></c>'
+
+    # 2) Editar la hoja en una sola pasada. Esto evita el bloqueo/lentitud de la versión anterior.
+    cell_pattern = re.compile(
+        r'<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)>(.*?)</c>|<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)/>',
+        re.DOTALL,
+    )
+
     with zipfile.ZipFile(io.BytesIO(template_bytes), "r") as zin:
-        original_sheet_xml = zin.read(sheet_path).decode("utf-8")
-        sheet_xml = original_sheet_xml
+        sheet_xml = zin.read(sheet_path).decode("utf-8")
 
-        # Limpiar todas las celdas diligenciables existentes A:AG, filas 2:501,
-        # conservando estilos y validaciones de la plantilla.
-        for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
-            for col in range(FIRST_COL, LAST_COL + 1):
-                sheet_xml = replace_cell_xml(sheet_xml, cell_ref(row_num, col), "", numeric=False)
+        def repl(match):
+            ref = match.group(1) or match.group(4)
+            if ref not in values:
+                return match.group(0)
+            attrs = match.group(2) if match.group(1) else match.group(5)
+            return build_cell(attrs, values.get(ref, ""), ref in numeric_cells)
 
-        # Escribir registros celda por celda.
-        for offset, record in enumerate(records):
-            row_num = DATA_START_ROW + offset
-            activity_values = record.get("actividades", {})
-            base_values = {
-                1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
-                2: record.get("nombre", ""),
-                3: record.get("cedula", ""),
-                4: normalize_to_allowed(record.get("genero", ""), allowed.get("genero", [])),
-                5: normalize_to_allowed(record.get("jornada", ""), allowed.get("jornada", [])),
-                6: normalize_to_allowed(record.get("cargo", ""), allowed.get("cargo", [])),
-                7: normalize_to_allowed(record.get("grado", ""), allowed.get("grado", [])),
-                8: normalize_to_allowed(record.get("nivel", ""), allowed.get("nivel", [])),
-                9: clean_dane(record.get("dane_ee", "")),
-                10: clean_dane(record.get("dane_sede", "")),
-            }
-
-            for col in range(1, 11):
-                # C, I y J como número para evitar el aviso verde de Excel.
-                # La estructura de la plantilla y sus validaciones se conserva.
-                sheet_xml = replace_cell_xml(
-                    sheet_xml,
-                    cell_ref(row_num, col),
-                    base_values.get(col, ""),
-                    numeric=(col in {3, 9, 10}),
-                )
-
-            for col in range(ACTIVITY_START_COL, ACTIVITY_END_COL + 1):
-                idx = col - ACTIVITY_START_COL
-                header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
-                val = activity_values.get(header, NO)
-                val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
-                sheet_xml = replace_cell_xml(sheet_xml, cell_ref(row_num, col), val, numeric=False)
+        sheet_xml = cell_pattern.sub(repl, sheet_xml)
 
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zout:
