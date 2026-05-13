@@ -1,12 +1,17 @@
-# Anexo 1 Tutor v6
+# Anexo 1 Tutor v9
 
-Aplicación web en Streamlit para diligenciar el Anexo 1 PTAFI 3.0 sobre la plantilla oficial del Ministerio, sin alterar su estructura.
+Aplicación Streamlit para diligenciar el Anexo 1 PTAFI sobre la plantilla oficial.
 
-## Archivos principales
+## Mejoras v9
 
-- `app.py`: aplicación principal.
-- `requirements.txt`: dependencias para Streamlit Cloud.
-- `assets/logo_ptafi_transparente.png`: logo usado en el banner.
+- Paso 0 bloqueado hasta completar todos los datos obligatorios.
+- Opción "Selecciona entrega" para obligar la selección de E1 a E10.
+- Botón Continuar con alertas de datos faltantes.
+- Modo de registro: Individual, Grupal y Todos.
+- En modo Todos se selecciona toda la base y se permite retirar docentes antes de agregar.
+- Limpieza automática de docente(s) y actividades después de agregar registros.
+- Motor de Excel ajustado para conservar validaciones x14 y listas desplegables de la plantilla oficial.
+- Escritura directa sobre la plantilla original sin reconstruir hojas.
 
 ## Ejecución local
 
@@ -14,27 +19,3 @@ Aplicación web en Streamlit para diligenciar el Anexo 1 PTAFI 3.0 sobre la plan
 pip install -r requirements.txt
 streamlit run app.py
 ```
-
-## Despliegue en Streamlit Cloud
-
-1. Subir todos estos archivos al repositorio de GitHub.
-2. Entrar a Streamlit Cloud.
-3. Crear o actualizar la app usando:
-   - Repository: `anexo1_tutor`
-   - Branch: `main`
-   - Main file path: `app.py`
-4. Presionar **Deploy** o **Reboot app**.
-
-## Flujo de uso
-
-1. Configurar tutor, entrega y DANE.
-2. Cargar Anexo 1 oficial.
-3. Cargar base docente.
-4. Seleccionar semana.
-5. Seleccionar docente individual o grupo de docentes.
-6. Marcar únicamente las actividades realizadas con “Sí”.
-7. Descargar el archivo final con nombre `E#_DANE.xlsx`.
-
-
-## v6
-Corrige la generación del Excel para evitar reparación en Microsoft Excel. Conserva listas desplegables, formatos y hoja oculta escribiendo sobre la plantilla oficial con openpyxl.

@@ -367,11 +367,16 @@ def replace_cell_xml(sheet_xml: str, ref: str, value, numeric: bool = False) -> 
 
 
 def write_records_to_template(template_bytes, records):
-    """Escribe registros sobre la plantilla de forma rápida y segura.
+    """Escribe registros sobre la plantilla oficial sin perder desplegables.
 
-    No usa pandas.to_excel, no inserta filas y no reserializa todo el libro con openpyxl.
-    Edita el XML de la hoja de actividades en una sola pasada, conservando intactas las
-    validaciones/listas desplegables, la hoja oculta y la estructura original del Anexo 1.
+    Estrategia v9:
+    - No se usa pandas.to_excel.
+    - No se usa openpyxl para guardar, porque la plantilla trae validaciones x14
+      que openpyxl no conserva al guardar.
+    - Se abre el .xlsx como paquete ZIP y se modifica únicamente el XML de la hoja
+      de actividades, reemplazando solo el contenido de celdas A2:AG501.
+    - Se conserva intacto el resto de la hoja: dataValidations, extLst/x14,
+      hoja oculta Listas, estilos, formatos y estructura original.
     """
     if len(records) > MAX_ROWS:
         raise ValueError(f"La plantilla solo permite {MAX_ROWS} registros.")
@@ -379,11 +384,10 @@ def write_records_to_template(template_bytes, records):
     allowed = get_allowed_lists(template_bytes)
     sheet_path = find_activity_sheet_path(template_bytes)
 
-    # 1) Construir mapa de valores para A:AG, filas 2:501.
-    #    Las filas sobrantes quedan limpias, sin tocar estilos ni validaciones.
     values = {}
     numeric_cells = set()
 
+    # Limpiar el rango diligenciable sin tocar estilos ni validaciones.
     for row_num in range(DATA_START_ROW, DATA_START_ROW + MAX_ROWS):
         for col in range(FIRST_COL, LAST_COL + 1):
             ref = cell_ref(row_num, col)
@@ -392,6 +396,7 @@ def write_records_to_template(template_bytes, records):
     for offset, record in enumerate(records):
         row_num = DATA_START_ROW + offset
         activity_values = record.get("actividades", {})
+
         base_values = {
             1: normalize_to_allowed(record.get("semana", ""), allowed.get("semana", [])),
             2: record.get("nombre", ""),
@@ -415,11 +420,10 @@ def write_records_to_template(template_bytes, records):
             idx = col - ACTIVITY_START_COL
             header = st.session_state.activities[idx] if 0 <= idx < len(st.session_state.activities) else f"Actividad columna {col}"
             val = activity_values.get(header, NO)
-            val = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
-            values[cell_ref(row_num, col)] = val
+            values[cell_ref(row_num, col)] = normalize_to_allowed(val, allowed.get("valor", [SI, NO]))
 
     def build_cell(attrs: str, value, numeric: bool) -> str:
-        # Conserva r="...", s="..." y otros atributos seguros. Solo quita t="..." cuando se reescribe.
+        # Conserva r="...", s="..." y demás atributos de formato; retira tipos anteriores.
         attrs_clean = re.sub(r'\s+t="[^"]*"', '', attrs)
         attrs_clean = re.sub(r'\s+cm="[^"]*"', '', attrs_clean)
         attrs_clean = re.sub(r'\s+vm="[^"]*"', '', attrs_clean)
@@ -433,7 +437,6 @@ def write_records_to_template(template_bytes, records):
         text = xml_escape_text(value)
         return f'<c{attrs_clean} t="inlineStr"><is><t>{text}</t></is></c>'
 
-    # 2) Editar la hoja en una sola pasada. Esto evita el bloqueo/lentitud de la versión anterior.
     cell_pattern = re.compile(
         r'<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)>(.*?)</c>|<c\b(?=[^>]*\br="([A-Z]+[0-9]+)")([^>]*)/>',
         re.DOTALL,
@@ -450,7 +453,12 @@ def write_records_to_template(template_bytes, records):
             return build_cell(attrs, values.get(ref, ""), ref in numeric_cells)
 
         sheet_xml = cell_pattern.sub(repl, sheet_xml)
-        sheet_xml = ensure_standard_data_validations(sheet_xml)
+
+        # Verificar que el XML siga siendo válido antes de empacar el archivo.
+        try:
+            ET.fromstring(sheet_xml.encode("utf-8"))
+        except Exception as e:
+            raise ValueError(f"La hoja generada no quedó en XML válido: {e}")
 
         output = io.BytesIO()
         with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as zout:
@@ -460,6 +468,14 @@ def write_records_to_template(template_bytes, records):
 
     output.seek(0)
     return output.getvalue()
+
+
+def validate_generated_file(xlsx_bytes):
+    """Verifica en el XML que sigan presentes las validaciones x14 de las listas."""
+    sheet_path = find_activity_sheet_path(xlsx_bytes)
+    with zipfile.ZipFile(io.BytesIO(xlsx_bytes), "r") as z:
+        txt = z.read(sheet_path).decode("utf-8")
+    return txt.count("x14:dataValidation")
 
 def css():
     logo_b64 = img_to_base64(LOGO_PATH)
