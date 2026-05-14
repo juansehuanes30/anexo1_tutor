@@ -667,43 +667,8 @@ def css():
         border: 1px solid #ff4b8b !important;
     }}
 
-
-    .stButton button *, .stDownloadButton button * {{
-        color: inherit !important;
-    }}
-
-
-    /* Botones de decisión del Paso 4 */
-    .stButton button[aria-label^="↩️ Continuar en semana"],
-    .stButton button[aria-label^="↩ Continuar en semana"] {{
-        background: linear-gradient(135deg, #f97316, #fb923c) !important;
-        color: #ffffff !important;
-        border: 0 !important;
-        font-weight: 900 !important;
-    }}
-
-    .stButton button[aria-label^="↩️ Continuar en semana"] *,
-    .stButton button[aria-label^="↩ Continuar en semana"] * {{
-        color: #ffffff !important;
-    }}
-
-    .stButton button[aria-label^="✅ Finalizar semana"],
-    .stButton button[aria-label^="✔️ Finalizar semana"],
-    .stButton button[aria-label^="✔ Finalizar semana"] {{
-        background: linear-gradient(135deg, #2563eb, #38bdf8) !important;
-        color: #ffffff !important;
-        border: 0 !important;
-        font-weight: 900 !important;
-    }}
-
-    .stButton button[aria-label^="✅ Finalizar semana"] *,
-    .stButton button[aria-label^="✔️ Finalizar semana"] *,
-    .stButton button[aria-label^="✔ Finalizar semana"] * {{
-        color: #ffffff !important;
-    }}
-
     .stButton button[kind="primary"], .stDownloadButton button[kind="primary"] {{
-        background: linear-gradient(135deg, #ff8a00, #ff5e00) !important;
+        background: linear-gradient(135deg, #ff4b4b, #ff4b8b) !important;
         color: #ffffff !important;
         border: 0 !important;
     }}
@@ -711,20 +676,6 @@ def css():
     .stButton button[kind="primary"] *, .stDownloadButton button[kind="primary"] * {{
         color: #ffffff !important;
     }}
-
-    
-    /* Botón volver al inicio */
-    div[data-testid="stButton"] button[kind="secondary"] {
-        background: linear-gradient(135deg, #16a34a, #22c55e) !important;
-        color: #ffffff !important;
-        border: 0 !important;
-    }
-
-    div[data-testid="stButton"] button[kind="secondary"]:hover {
-        background: linear-gradient(135deg, #15803d, #16a34a) !important;
-        color: #ffffff !important;
-    }
-
 
     /* Captions */
     .stCaptionContainer, .stCaptionContainer p {{
@@ -911,7 +862,7 @@ if st.session_state.entrega_finalizada:
             '<div class="small-note">Tu archivo fue generado correctamente. Recuerda entregarlo según las orientaciones del programa PTAFI.</div></div>',
             unsafe_allow_html=True,
         )
-        if st.button("🏠 Volver al inicio", use_container_width=True, type="secondary"):
+        if st.button("🏠 Volver al inicio", use_container_width=True):
             reset_app_to_start()
             st.rerun()
     st.stop()
