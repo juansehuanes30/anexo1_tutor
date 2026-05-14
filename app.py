@@ -677,6 +677,57 @@ def css():
         color: #ffffff !important;
     }}
 
+
+    /* ===== AJUSTES BOTONES ESPECÍFICOS v14 ===== */
+    .st-key-btn_continuar_semana button {{
+        background: linear-gradient(135deg, #ff8a00, #ff5e00) !important;
+        color: #ffffff !important;
+        border: 0 !important;
+        font-weight: 900 !important;
+    }}
+
+    .st-key-btn_continuar_semana button * {{
+        color: #ffffff !important;
+    }}
+
+    .st-key-btn_finalizar_semana button {{
+        background: linear-gradient(135deg, #0d6efd, #2563eb) !important;
+        color: #ffffff !important;
+        border: 0 !important;
+        font-weight: 900 !important;
+    }}
+
+    .st-key-btn_finalizar_semana button * {{
+        color: #ffffff !important;
+    }}
+
+    .st-key-btn_cancelar_finalizacion button {{
+        background: linear-gradient(135deg, #ff8a00, #ff5e00) !important;
+        color: #ffffff !important;
+        border: 0 !important;
+        font-weight: 900 !important;
+    }}
+
+    .st-key-btn_cancelar_finalizacion button * {{
+        color: #ffffff !important;
+    }}
+
+    .st-key-btn_volver_inicio button {{
+        background: linear-gradient(135deg, #16a34a, #22c55e) !important;
+        color: #ffffff !important;
+        border: 0 !important;
+        font-weight: 900 !important;
+    }}
+
+    .st-key-btn_volver_inicio button * {{
+        color: #ffffff !important;
+    }}
+
+    .st-key-btn_volver_inicio button:hover {{
+        background: linear-gradient(135deg, #15803d, #16a34a) !important;
+        color: #ffffff !important;
+    }}
+
     /* Captions */
     .stCaptionContainer, .stCaptionContainer p {{
         color: #f8ecff !important;
@@ -862,7 +913,7 @@ if st.session_state.entrega_finalizada:
             '<div class="small-note">Tu archivo fue generado correctamente. Recuerda entregarlo según las orientaciones del programa PTAFI.</div></div>',
             unsafe_allow_html=True,
         )
-        if st.button("🏠 Volver al inicio", use_container_width=True):
+        if st.button("🏠 Volver al inicio", use_container_width=True, key="btn_volver_inicio"):
             reset_app_to_start()
             st.rerun()
     st.stop()
@@ -1022,7 +1073,7 @@ if st.session_state.confirmar_finalizacion:
                 except Exception as e:
                     st.error(f"No fue posible generar el archivo final: {e}")
     with col_cancel:
-        if st.button("Cancelar", use_container_width=True):
+        if st.button("Cancelar", use_container_width=True, key="btn_cancelar_finalizacion"):
             st.session_state.confirmar_finalizacion = False
             st.rerun()
 
@@ -1031,12 +1082,12 @@ elif st.session_state.mostrar_botones_decision and records:
     semana_actual = records[-1].get("semana", "")
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button(f"↩️ Continuar en semana: {semana_actual}", use_container_width=True):
+        if st.button(f"↩️ Continuar en semana: {semana_actual}", use_container_width=True, key="btn_continuar_semana"):
             st.session_state.mostrar_botones_decision = False
             reset_entry_form()
             st.rerun()
     with c2:
-        if st.button(f"✅ Finalizar semana: {semana_actual} y continuar con otra semana", use_container_width=True):
+        if st.button(f"✅ Finalizar semana: {semana_actual} y continuar con otra semana", use_container_width=True, key="btn_finalizar_semana"):
             if semana_actual and semana_actual not in st.session_state.semanas_finalizadas:
                 st.session_state.semanas_finalizadas.append(semana_actual)
             st.session_state.mostrar_botones_decision = False
