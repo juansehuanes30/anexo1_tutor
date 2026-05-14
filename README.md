@@ -1,4 +1,4 @@
-# Anexo 1 Tutor v10
+# Anexo 1 Tutor v11
 
 Versión ajustada con:
 
@@ -17,3 +17,11 @@ Versión ajustada con:
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+
+## Ajustes v11
+
+- Botones con mejor contraste para que el texto sea visible sin pasar el mouse.
+- Opción de finalizar entrega disponible después de continuar en una semana o finalizar una semana.
+- Mensaje final de agradecimiento después de generar el archivo descargable.
+- Botón Volver al inicio para reiniciar la aplicación.

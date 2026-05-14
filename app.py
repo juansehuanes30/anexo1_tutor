@@ -655,6 +655,26 @@ def css():
         border-radius: 14px;
         font-weight: 800;
         min-height: 44px;
+        background: #f3e8ff !important;
+        color: #2b003d !important;
+        border: 1px solid rgba(255,255,255,.65) !important;
+        box-shadow: 0 8px 18px rgba(0,0,0,.16);
+    }}
+
+    .stButton button:hover, .stDownloadButton button:hover {{
+        background: #ffffff !important;
+        color: #2b003d !important;
+        border: 1px solid #ff4b8b !important;
+    }}
+
+    .stButton button[kind="primary"], .stDownloadButton button[kind="primary"] {{
+        background: linear-gradient(135deg, #ff4b4b, #ff4b8b) !important;
+        color: #ffffff !important;
+        border: 0 !important;
+    }}
+
+    .stButton button[kind="primary"] *, .stDownloadButton button[kind="primary"] * {{
+        color: #ffffff !important;
     }}
 
     /* Captions */
@@ -737,6 +757,19 @@ def generate_final_file(entrega, dane_ee):
     st.session_state.entrega_finalizada = True
     st.session_state.confirmar_finalizacion = False
     st.session_state.mostrar_botones_decision = False
+
+
+def reset_app_to_start():
+    keys_to_clear = [
+        "template_bytes", "teacher_df", "records", "activities", "weeks", "step",
+        "reset_key", "last_add_message", "semanas_finalizadas",
+        "mostrar_botones_decision", "entrega_finalizada", "confirmar_finalizacion",
+        "archivo_generado", "archivo_nombre", "tutor_name", "entrega", "dane_ee",
+        "template_mode", "base_mode", "template_uploader", "base_uploader",
+    ]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 # -------------------------
 # PASO 0
@@ -824,6 +857,14 @@ if st.session_state.entrega_finalizada:
             use_container_width=True,
             type="primary",
         )
+        st.markdown(
+            '<div class="card"><div class="step-title">Gracias por utilizar Anexo 1 Tutor</div>'
+            '<div class="small-note">Tu archivo fue generado correctamente. Recuerda entregarlo según las orientaciones del programa PTAFI.</div></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("🏠 Volver al inicio", use_container_width=True):
+            reset_app_to_start()
+            st.rerun()
     st.stop()
 
 if st.session_state.step == 0:
@@ -1007,6 +1048,9 @@ elif st.session_state.mostrar_botones_decision and records:
             st.rerun()
 else:
     if records:
-        st.info("Puedes seguir editando o agregar nuevos registros. Al agregar nuevamente, aparecerán las opciones de continuidad.")
+        st.info("Puedes seguir editando o agregar nuevos registros. También puedes finalizar la entrega si ya terminaste.")
+        if st.button(f"🏁 Finalizar entrega {entrega}", use_container_width=True, type="primary", key="finalizar_entrega_disponible"):
+            st.session_state.confirmar_finalizacion = True
+            st.rerun()
     else:
         st.info("Agrega al menos un registro para habilitar las opciones de continuidad y finalización.")
