@@ -1,17 +1,13 @@
-# Anexo 1 Tutor v14
+# Anexo 1 Tutor v15
 
 Aplicación Streamlit para diligenciar el Anexo 1 PTAFI sobre la plantilla oficial.
 
-## Ajuste v14
+## Ajuste v15
 
-Esta versión parte de la versión 11 funcional y solo modifica los colores de botones específicos:
-
-- Botón “Continuar en semana”: fondo naranja, letras blancas.
-- Botón “Finalizar semana y continuar con otra semana”: fondo azul, letras blancas.
-- Botón “Cancelar”: fondo naranja, letras blancas.
-- Botón “Volver al inicio”: fondo verde, letras blancas.
-
-No se modifica la lógica de generación del Excel, validaciones, listas desplegables ni estructura funcional existente.
+- Parte de la versión 14 funcional.
+- Se corrige el logo para que aparezca con fondo transparente, sin cuadros grises ni blancos.
+- Se conservan los ajustes de colores de botones de la versión 14.
+- No se modifica la lógica de generación del Excel, validaciones, listas desplegables ni flujo funcional.
 
 ## Ejecución local
 
