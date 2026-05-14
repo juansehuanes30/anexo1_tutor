@@ -41,7 +41,7 @@ def slug(text: str) -> str:
 
 def normalize_yes_no(value: str) -> str:
     s = slug(value)
-    return SI if s in {"si", "s", "yes"} else NO
+    return SI if s in {"si", "s", "yes"}} else NO
 
 
 def clean_dane(value) -> str:
@@ -53,7 +53,7 @@ def get_worksheet(wb):
     for name in SHEET_CANDIDATES:
         if name in wb.sheetnames:
             return wb[name]
-    raise ValueError(f"No se encontró una hoja llamada {SHEET_CANDIDATES}.")
+    raise ValueError(f"No se encontró una hoja llamada {SHEET_CANDIDATES}}.")
 
 
 def find_column(df: pd.DataFrame, possible_names):
@@ -714,7 +714,7 @@ def css():
 
     
     /* Botón volver al inicio */
-    div[data-testid="stButton"] button[kind="secondary"] {
+    div[data-testid="stButton"] button[kind="secondary"] {{
         background: linear-gradient(135deg, #16a34a, #22c55e) !important;
         color: #ffffff !important;
         border: 0 !important;
