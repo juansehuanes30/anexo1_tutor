@@ -1,19 +1,17 @@
-# Anexo 1 Tutor v9
+# Anexo 1 Tutor v10
 
-Aplicación Streamlit para diligenciar el Anexo 1 PTAFI sobre la plantilla oficial.
+Versión ajustada con:
 
-## Mejoras v9
+- Columna `CODIGO DANE SEDE` tomada desde la base docente para diligenciar la columna J del Anexo 1.
+- Se conserva el campo `Código DANE del EE` en el Paso 0 para diligenciar la columna I.
+- Se elimina el campo manual de Código DANE sede.
+- Validación de duplicados por combinación exacta `semana de columna A + cédula`.
+- Sección para editar registros existentes y agregar/quitar actividades sin crear duplicados.
+- Flujo de continuidad: continuar en semana, finalizar semana y continuar con otra, finalizar entrega.
+- La descarga se habilita únicamente después de finalizar la entrega.
+- Se conserva el motor XML de escritura sobre plantilla oficial para mantener estructura, listas desplegables y evitar mensajes de reparación.
 
-- Paso 0 bloqueado hasta completar todos los datos obligatorios.
-- Opción "Selecciona entrega" para obligar la selección de E1 a E10.
-- Botón Continuar con alertas de datos faltantes.
-- Modo de registro: Individual, Grupal y Todos.
-- En modo Todos se selecciona toda la base y se permite retirar docentes antes de agregar.
-- Limpieza automática de docente(s) y actividades después de agregar registros.
-- Motor de Excel ajustado para conservar validaciones x14 y listas desplegables de la plantilla oficial.
-- Escritura directa sobre la plantilla original sin reconstruir hojas.
-
-## Ejecución local
+## Ejecutar
 
 ```bash
 pip install -r requirements.txt

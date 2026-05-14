@@ -80,6 +80,7 @@ COLUMN_MAP_CANDIDATES = {
     "cargo": ["CARGO"],
     "grado": ["GRADO"],
     "nivel": ["NIVEL DE ENSEÑANZA", "NIVEL", "NIVEL ENSENANZA"],
+    "dane_sede": ["CODIGO DANE SEDE", "CÓDIGO DANE SEDE", "DANE SEDE", "CODIGO SEDE", "CÓDIGO SEDE"],
 }
 
 
@@ -142,6 +143,7 @@ def load_teacher_database(uploaded_file) -> pd.DataFrame:
     out["cargo"] = out["cargo"].astype(str).str.strip()
     out["grado"] = out["grado"].astype(str).str.strip()
     out["nivel"] = out["nivel"].astype(str).str.strip()
+    out["dane_sede"] = out["dane_sede"].apply(clean_dane)
     out = out[out["nombre"].str.lower().ne("nan") & out["nombre"].ne("")].drop_duplicates(subset=["cedula", "nombre"])
     out["etiqueta"] = out["nombre"] + " — " + out["cedula"]
     return out.reset_index(drop=True)
@@ -690,6 +692,51 @@ if "reset_key" not in st.session_state:
     st.session_state.reset_key = 0
 if "last_add_message" not in st.session_state:
     st.session_state.last_add_message = ""
+if "semanas_finalizadas" not in st.session_state:
+    st.session_state.semanas_finalizadas = []
+if "mostrar_botones_decision" not in st.session_state:
+    st.session_state.mostrar_botones_decision = False
+if "entrega_finalizada" not in st.session_state:
+    st.session_state.entrega_finalizada = False
+if "confirmar_finalizacion" not in st.session_state:
+    st.session_state.confirmar_finalizacion = False
+if "archivo_generado" not in st.session_state:
+    st.session_state.archivo_generado = None
+if "archivo_nombre" not in st.session_state:
+    st.session_state.archivo_nombre = ""
+
+
+def record_key(record):
+    return f"{record.get('semana', '')}|||{clean_dane(record.get('cedula', ''))}"
+
+
+def selected_duplicate_records(selected_labels, current_week, teacher_df):
+    """Devuelve docentes seleccionados que ya están registrados en la semana actual."""
+    registered = {record_key(r) for r in st.session_state.records}
+    duplicates = []
+    for label in selected_labels:
+        row = teacher_df[teacher_df["etiqueta"] == label]
+        if row.empty:
+            continue
+        r = row.iloc[0].to_dict()
+        key = f"{current_week}|||{clean_dane(r.get('cedula', ''))}"
+        if key in registered:
+            duplicates.append({"nombre": r.get("nombre", ""), "cedula": r.get("cedula", "")})
+    return duplicates
+
+
+def reset_entry_form():
+    st.session_state.reset_key += 1
+
+
+def generate_final_file(entrega, dane_ee):
+    filename = f"{entrega}_{clean_dane(dane_ee) or 'DANE'}.xlsx"
+    output_bytes = write_records_to_template(st.session_state.template_bytes, st.session_state.records)
+    st.session_state.archivo_generado = output_bytes
+    st.session_state.archivo_nombre = filename
+    st.session_state.entrega_finalizada = True
+    st.session_state.confirmar_finalizacion = False
+    st.session_state.mostrar_botones_decision = False
 
 # -------------------------
 # PASO 0
@@ -697,17 +744,16 @@ if "last_add_message" not in st.session_state:
 st.markdown('<div class="card"><div class="step-title">PASO 0 — Configuración inicial</div><div class="small-note">Carga la plantilla oficial y la base docente. Completa todos los datos para continuar.</div></div>', unsafe_allow_html=True)
 
 with st.container():
-    col_name, col_delivery, col_dane, col_sede = st.columns([1.4, .9, 1, 1])
-    tutor_name = col_name.text_input("Nombre del tutor", placeholder="Ejemplo: David", key="tutor_name")
-    entrega = col_delivery.selectbox("Número de entrega", ["Selecciona entrega"] + [f"E{i}" for i in range(1, 11)], index=0, key="entrega")
-    dane_ee = col_dane.text_input("Código DANE del EE", placeholder="218150000578", max_chars=12, key="dane_ee")
-    dane_sede = col_sede.text_input("Código DANE de la sede", placeholder="218150000578", max_chars=12, key="dane_sede")
+    col_name, col_delivery, col_dane = st.columns([1.5, .9, 1.1])
+    tutor_name = col_name.text_input("Nombre del tutor", placeholder="Ejemplo: David", key="tutor_name", disabled=st.session_state.entrega_finalizada)
+    entrega = col_delivery.selectbox("Número de entrega", ["Selecciona entrega"] + [f"E{i}" for i in range(1, 11)], index=0, key="entrega", disabled=st.session_state.entrega_finalizada)
+    dane_ee = col_dane.text_input("Código DANE del EE", placeholder="218150000578", max_chars=12, key="dane_ee", disabled=st.session_state.entrega_finalizada)
 
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("📄 Anexo 1 oficial")
-        template_mode = st.radio("¿Cómo desea trabajar el Anexo 1?", ["Cargar nuevo archivo", "Conservar archivo actual"], horizontal=True, key="template_mode")
-        if template_mode == "Cargar nuevo archivo" or st.session_state.template_bytes is None:
+        template_mode = st.radio("¿Cómo desea trabajar el Anexo 1?", ["Cargar nuevo archivo", "Conservar archivo actual"], horizontal=True, key="template_mode", disabled=st.session_state.entrega_finalizada)
+        if (template_mode == "Cargar nuevo archivo" or st.session_state.template_bytes is None) and not st.session_state.entrega_finalizada:
             template_file = st.file_uploader("Cargar Anexo 1 del PTAFI (.xlsx)", type=["xlsx"], key="template_uploader")
             if template_file is not None:
                 st.session_state.template_bytes = template_file.getvalue()
@@ -724,8 +770,8 @@ with st.container():
 
     with c2:
         st.subheader("👩‍🏫 Base de datos de docentes")
-        base_mode = st.radio("¿Cómo desea trabajar la base de docentes?", ["Cargar nueva base de datos", "Conservar base actual"], horizontal=True, key="base_mode")
-        if base_mode == "Cargar nueva base de datos" or st.session_state.teacher_df is None:
+        base_mode = st.radio("¿Cómo desea trabajar la base de docentes?", ["Cargar nueva base de datos", "Conservar base actual"], horizontal=True, key="base_mode", disabled=st.session_state.entrega_finalizada)
+        if (base_mode == "Cargar nueva base de datos" or st.session_state.teacher_df is None) and not st.session_state.entrega_finalizada:
             base_file = st.file_uploader("Cargar base de docentes (.xlsx o .csv)", type=["xlsx", "csv"], key="base_uploader")
             if base_file is not None:
                 try:
@@ -744,18 +790,18 @@ if entrega == "Selecciona entrega":
     missing.append("número de entrega")
 if len(clean_dane(dane_ee)) != 12:
     missing.append("Código DANE del EE de 12 dígitos")
-if len(clean_dane(dane_sede)) != 12:
-    missing.append("Código DANE de la sede de 12 dígitos")
 if st.session_state.template_bytes is None:
     missing.append("archivo Anexo 1 oficial")
 if st.session_state.teacher_df is None:
     missing.append("base de datos de docentes")
+elif "dane_sede" not in st.session_state.teacher_df.columns or st.session_state.teacher_df["dane_sede"].fillna("").astype(str).str.strip().eq("").any():
+    missing.append("columna CODIGO DANE SEDE completa en la base docente")
 
 col_continue, col_status = st.columns([.25, .75])
 with col_continue:
-    continue_clicked = st.button("➡️ Continuar", use_container_width=True, type="primary")
+    continue_clicked = st.button("➡️ Continuar", use_container_width=True, type="primary", disabled=st.session_state.entrega_finalizada)
 with col_status:
-    if st.session_state.step == 0:
+    if st.session_state.step == 0 and not st.session_state.entrega_finalizada:
         st.caption("El botón permite avanzar cuando todos los datos iniciales estén completos.")
 
 if continue_clicked:
@@ -767,93 +813,150 @@ if continue_clicked:
         st.success("Configuración inicial completa. Puedes continuar con el registro de actividades.")
         st.rerun()
 
+if st.session_state.entrega_finalizada:
+    st.success("La entrega fue finalizada. Los campos de diligenciamiento están bloqueados.")
+    if st.session_state.archivo_generado:
+        st.download_button(
+            label=f"⬇️ Descargar archivo diligenciado: {st.session_state.archivo_nombre}",
+            data=st.session_state.archivo_generado,
+            file_name=st.session_state.archivo_nombre,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+        )
+    st.stop()
+
 if st.session_state.step == 0:
     if missing:
         st.info("Pendiente por completar: " + ", ".join(missing) + ".")
     st.stop()
 
 # -------------------------
-# PASOS 1, 2, 3 y 4
+# PASOS 1, 2 y 3
 # -------------------------
-df = st.session_state.teacher_df.copy()
+df_base = st.session_state.teacher_df.copy()
 activities = st.session_state.activities
-weeks = st.session_state.weeks or [f"Semana {i}" for i in range(1, 9)]
+weeks_all = st.session_state.weeks or [f"Semana {i}" for i in range(1, 9)]
+weeks_available = [w for w in weeks_all if w not in st.session_state.semanas_finalizadas]
 reset_key = st.session_state.reset_key
 
 if st.session_state.last_add_message:
     st.success(st.session_state.last_add_message)
     st.session_state.last_add_message = ""
 
-st.markdown('<div class="card"><div class="step-title">PASO 1 — Seleccionar semana</div></div>', unsafe_allow_html=True)
-semana = st.selectbox("Semana de acompañamiento", weeks, key=f"semana_{reset_key}")
-
-st.markdown('<div class="card"><div class="step-title">PASO 2 — Seleccionar docentes</div><div class="small-note">Usa modo individual, grupal o todos. En “Todos” puedes quitar docentes antes de agregar el registro.</div></div>', unsafe_allow_html=True)
-
-filter_cols = st.columns(3)
-for label, field, col in [("Filtrar por jornada", "jornada", filter_cols[0]), ("Filtrar por grado", "grado", filter_cols[1]), ("Filtrar por nivel", "nivel", filter_cols[2])]:
-    vals = sorted([v for v in df[field].dropna().unique().tolist() if str(v).strip() and str(v).lower() != "nan"])
-    selected_filter = col.multiselect(label, vals, key=f"filter_{field}_{reset_key}")
-    if selected_filter:
-        df = df[df[field].isin(selected_filter)]
-
-modo = st.radio("Modo de registro", ["Individual", "Grupal", "Todos"], horizontal=True, key=f"modo_{reset_key}")
-
-if modo == "Individual":
-    selected = st.selectbox("Seleccionar docente", df["etiqueta"].tolist(), key=f"doc_individual_{reset_key}")
-    selected_labels = [selected] if selected else []
-elif modo == "Grupal":
-    selected_labels = st.multiselect("Seleccionar varios docentes", df["etiqueta"].tolist(), key=f"doc_grupal_{reset_key}")
+if not weeks_available:
+    st.warning("Todas las semanas disponibles fueron finalizadas. Finaliza la entrega para generar el archivo.")
+    st.session_state.mostrar_botones_decision = True
 else:
-    selected_labels = st.multiselect(
-        "Docentes seleccionados automáticamente. Puedes eliminar uno o varios antes de agregar.",
-        df["etiqueta"].tolist(),
-        default=df["etiqueta"].tolist(),
-        key=f"doc_todos_{reset_key}"
-    )
+    st.markdown('<div class="card"><div class="step-title">PASO 1 — Seleccionar semana</div></div>', unsafe_allow_html=True)
+    semana = st.selectbox("Semana de acompañamiento", weeks_available, key=f"semana_{reset_key}", disabled=st.session_state.mostrar_botones_decision)
 
-st.markdown('<div class="card"><div class="step-title">PASO 3 — Marcar actividades realizadas</div><div class="small-note">Marca solo las actividades realizadas. Las no seleccionadas se guardarán automáticamente como “No”.</div></div>', unsafe_allow_html=True)
-selected_activities = st.multiselect("Actividades con respuesta Sí", activities, key=f"activities_{reset_key}")
+    st.markdown('<div class="card"><div class="step-title">PASO 2 — Seleccionar docentes</div><div class="small-note">Usa modo individual, grupal o todos. En “Todos” puedes quitar docentes antes de agregar el registro.</div></div>', unsafe_allow_html=True)
 
-col_add, col_reset = st.columns([1, 1])
-with col_add:
-    add_clicked = st.button("➕ Agregar registro(s)", use_container_width=True, type="primary")
-with col_reset:
-    if st.button("🧹 Limpiar registros agregados", use_container_width=True):
-        st.session_state.records = []
-        st.session_state.reset_key += 1
-        st.rerun()
+    df = df_base.copy()
+    filter_cols = st.columns(3)
+    for label, field, col in [("Filtrar por jornada", "jornada", filter_cols[0]), ("Filtrar por grado", "grado", filter_cols[1]), ("Filtrar por nivel", "nivel", filter_cols[2])]:
+        vals = sorted([v for v in df[field].dropna().unique().tolist() if str(v).strip() and str(v).lower() != "nan"])
+        selected_filter = col.multiselect(label, vals, key=f"filter_{field}_{reset_key}", disabled=st.session_state.mostrar_botones_decision)
+        if selected_filter:
+            df = df[df[field].isin(selected_filter)]
 
-if add_clicked:
-    if not selected_labels:
-        st.error("Selecciona al menos un docente.")
+    modo = st.radio("Modo de registro", ["Individual", "Grupal", "Todos"], horizontal=True, key=f"modo_{reset_key}", disabled=st.session_state.mostrar_botones_decision)
+
+    if modo == "Individual":
+        selected = st.selectbox("Seleccionar docente", df["etiqueta"].tolist(), key=f"doc_individual_{reset_key}", disabled=st.session_state.mostrar_botones_decision)
+        selected_labels = [selected] if selected else []
+    elif modo == "Grupal":
+        selected_labels = st.multiselect("Seleccionar varios docentes", df["etiqueta"].tolist(), key=f"doc_grupal_{reset_key}", disabled=st.session_state.mostrar_botones_decision)
     else:
-        activity_dict = {activity: (SI if activity in selected_activities else NO) for activity in activities}
-        current_df = st.session_state.teacher_df
-        added = 0
-        for label in selected_labels:
-            row = current_df[current_df["etiqueta"] == label]
-            if row.empty:
-                continue
-            r = row.iloc[0].to_dict()
-            st.session_state.records.append({
-                "semana": semana,
-                "nombre": r.get("nombre", ""),
-                "cedula": r.get("cedula", ""),
-                "genero": r.get("genero", ""),
-                "jornada": r.get("jornada", ""),
-                "cargo": r.get("cargo", ""),
-                "grado": r.get("grado", ""),
-                "nivel": r.get("nivel", ""),
-                "dane_ee": clean_dane(dane_ee),
-                "dane_sede": clean_dane(dane_sede),
-                "actividades": activity_dict.copy(),
-            })
-            added += 1
-        st.session_state.last_add_message = f"Se agregaron {added} registro(s). Total acumulado: {len(st.session_state.records)}. Los campos de docentes y actividades quedaron limpios para un nuevo registro."
-        st.session_state.reset_key += 1
-        st.rerun()
+        selected_labels = st.multiselect(
+            "Docentes seleccionados automáticamente. Puedes eliminar uno o varios antes de agregar.",
+            df["etiqueta"].tolist(),
+            default=df["etiqueta"].tolist(),
+            key=f"doc_todos_{reset_key}",
+            disabled=st.session_state.mostrar_botones_decision,
+        )
 
-st.markdown('<div class="card"><div class="step-title">PASO 4 — ¿Agregar más o finalizar?</div><div class="small-note">Si necesitas más docentes o actividades, repite los pasos 1 a 3. Cuando termines, descarga el archivo final.</div></div>', unsafe_allow_html=True)
+    duplicates = selected_duplicate_records(selected_labels, semana, df_base)
+    if duplicates:
+        dup_text = "; ".join([f"{d['nombre']} — {d['cedula']}" for d in duplicates])
+        st.error("Los siguientes docentes ya están registrados en esta semana: " + dup_text + ". Retíralos de la selección para continuar. Si necesitas modificar sus actividades, usa 'Editar registro existente'.")
+
+    st.markdown('<div class="card"><div class="step-title">PASO 3 — Marcar actividades realizadas</div><div class="small-note">Marca solo las actividades realizadas. Las no seleccionadas se guardarán automáticamente como “No”.</div></div>', unsafe_allow_html=True)
+    selected_activities = st.multiselect("Actividades con respuesta Sí", activities, key=f"activities_{reset_key}", disabled=st.session_state.mostrar_botones_decision)
+
+    col_add, col_reset = st.columns([1, 1])
+    with col_add:
+        add_clicked = st.button("➕ Agregar registro(s)", use_container_width=True, type="primary", disabled=st.session_state.mostrar_botones_decision)
+    with col_reset:
+        if st.button("🧹 Limpiar registros agregados", use_container_width=True, disabled=st.session_state.mostrar_botones_decision):
+            st.session_state.records = []
+            st.session_state.semanas_finalizadas = []
+            st.session_state.mostrar_botones_decision = False
+            reset_entry_form()
+            st.rerun()
+
+    if add_clicked:
+        if not selected_labels:
+            st.error("Selecciona al menos un docente.")
+        elif duplicates:
+            st.error("No se pueden agregar registros mientras haya docentes ya registrados en esta semana. Retíralos de la selección o edítalos.")
+        else:
+            activity_dict = {activity: (SI if activity in selected_activities else NO) for activity in activities}
+            added = 0
+            for label in selected_labels:
+                row = df_base[df_base["etiqueta"] == label]
+                if row.empty:
+                    continue
+                r = row.iloc[0].to_dict()
+                st.session_state.records.append({
+                    "semana": semana,
+                    "nombre": r.get("nombre", ""),
+                    "cedula": r.get("cedula", ""),
+                    "genero": r.get("genero", ""),
+                    "jornada": r.get("jornada", ""),
+                    "cargo": r.get("cargo", ""),
+                    "grado": r.get("grado", ""),
+                    "nivel": r.get("nivel", ""),
+                    "dane_ee": clean_dane(dane_ee),
+                    "dane_sede": clean_dane(r.get("dane_sede", "")),
+                    "actividades": activity_dict.copy(),
+                })
+                added += 1
+            st.session_state.last_add_message = f"Se agregaron {added} registro(s). Total acumulado: {len(st.session_state.records)}."
+            st.session_state.mostrar_botones_decision = True
+            reset_entry_form()
+            st.rerun()
+
+# -------------------------
+# Editar registro existente
+# -------------------------
+if st.session_state.records and not st.session_state.mostrar_botones_decision:
+    with st.expander("✏️ Editar registro existente", expanded=False):
+        editable_records = []
+        editable_indices = []
+        for i, r in enumerate(st.session_state.records):
+            if r.get("semana") not in st.session_state.semanas_finalizadas:
+                editable_indices.append(i)
+                editable_records.append(f"{r.get('semana')} — {r.get('nombre')} — {r.get('cedula')}")
+        if not editable_records:
+            st.info("No hay registros editables. Las semanas finalizadas no se pueden modificar.")
+        else:
+            selected_edit = st.selectbox("Seleccionar registro para editar", editable_records, key=f"edit_record_{reset_key}")
+            edit_pos = editable_indices[editable_records.index(selected_edit)]
+            current = st.session_state.records[edit_pos]
+            current_yes = [a for a, v in current.get("actividades", {}).items() if v == SI]
+            new_yes = st.multiselect("Actividades con respuesta Sí", activities, default=current_yes, key=f"edit_activities_{reset_key}")
+            if st.button("💾 Guardar cambios del registro", use_container_width=True, key=f"save_edit_{reset_key}"):
+                st.session_state.records[edit_pos]["actividades"] = {activity: (SI if activity in new_yes else NO) for activity in activities}
+                st.success("Registro actualizado correctamente.")
+                reset_entry_form()
+                st.rerun()
+
+# -------------------------
+# PASO 4 — decisiones y descarga
+# -------------------------
+st.markdown('<div class="card"><div class="step-title">PASO 4 — Continuar, finalizar semana o finalizar entrega</div><div class="small-note">Después de agregar registros, elige cómo continuar. La descarga solo se habilita al finalizar la entrega.</div></div>', unsafe_allow_html=True)
 
 records = st.session_state.records
 st.metric("Registros agregados", len(records))
@@ -861,23 +964,49 @@ if records:
     preview = []
     for r in records:
         yes_count = sum(1 for v in r["actividades"].values() if v == SI)
-        preview.append({"Semana": r["semana"], "Docente": r["nombre"], "Cédula": r["cedula"], "Actividades Sí": yes_count})
+        preview.append({"Semana": r["semana"], "Docente": r["nombre"], "Cédula": r["cedula"], "DANE sede": r.get("dane_sede", ""), "Actividades Sí": yes_count})
     st.dataframe(pd.DataFrame(preview), use_container_width=True, hide_index=True)
 
-filename = f"{entrega}_{clean_dane(dane_ee) or 'DANE'}.xlsx"
-if records:
-    try:
-        output_bytes = write_records_to_template(st.session_state.template_bytes, records)
-        st.download_button(
-            label=f"⬇️ Descargar archivo diligenciado: {filename}",
-            data=output_bytes,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary",
-        )
-        st.caption("El archivo descargado conserva la plantilla original, agrega validaciones estándar para los desplegables y solo escribe en las columnas A a AG de la hoja de actividades.")
-    except Exception as e:
-        st.error(f"No fue posible generar el archivo final: {e}")
+if st.session_state.confirmar_finalizacion:
+    st.warning(f"Está a punto de finalizar la entrega {entrega}. Una vez finalizada, no podrá realizar más cambios en esta sesión. ¿Está seguro?")
+    col_yes, col_cancel = st.columns(2)
+    with col_yes:
+        if st.button("✅ Sí, finalizar entrega", use_container_width=True, type="primary"):
+            if not records:
+                st.error("No puedes finalizar una entrega sin registros.")
+            else:
+                try:
+                    generate_final_file(entrega, dane_ee)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"No fue posible generar el archivo final: {e}")
+    with col_cancel:
+        if st.button("Cancelar", use_container_width=True):
+            st.session_state.confirmar_finalizacion = False
+            st.rerun()
+
+elif st.session_state.mostrar_botones_decision and records:
+    # La semana actual se toma del último registro agregado, que corresponde al ciclo recién cerrado.
+    semana_actual = records[-1].get("semana", "")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button(f"↩️ Continuar en semana: {semana_actual}", use_container_width=True):
+            st.session_state.mostrar_botones_decision = False
+            reset_entry_form()
+            st.rerun()
+    with c2:
+        if st.button(f"✅ Finalizar semana: {semana_actual} y continuar con otra semana", use_container_width=True):
+            if semana_actual and semana_actual not in st.session_state.semanas_finalizadas:
+                st.session_state.semanas_finalizadas.append(semana_actual)
+            st.session_state.mostrar_botones_decision = False
+            reset_entry_form()
+            st.rerun()
+    with c3:
+        if st.button(f"🏁 Finalizar entrega {entrega}", use_container_width=True, type="primary"):
+            st.session_state.confirmar_finalizacion = True
+            st.rerun()
 else:
-    st.info("Agrega al menos un registro para habilitar la descarga final.")
+    if records:
+        st.info("Puedes seguir editando o agregar nuevos registros. Al agregar nuevamente, aparecerán las opciones de continuidad.")
+    else:
+        st.info("Agrega al menos un registro para habilitar las opciones de continuidad y finalización.")
