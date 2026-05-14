@@ -1023,25 +1023,78 @@ else:
 # -------------------------
 # Editar registro existente
 # -------------------------
+if "edit_success_message" not in st.session_state:
+    st.session_state.edit_success_message = ""
+
+if st.session_state.edit_success_message:
+    st.success(st.session_state.edit_success_message)
+    st.session_state.edit_success_message = ""
+
 if st.session_state.records and not st.session_state.mostrar_botones_decision:
     with st.expander("✏️ Editar registro existente", expanded=False):
         editable_records = []
         editable_indices = []
+
         for i, r in enumerate(st.session_state.records):
             if r.get("semana") not in st.session_state.semanas_finalizadas:
                 editable_indices.append(i)
                 editable_records.append(f"{r.get('semana')} — {r.get('nombre')} — {r.get('cedula')}")
+
         if not editable_records:
             st.info("No hay registros editables. Las semanas finalizadas no se pueden modificar.")
         else:
-            selected_edit = st.selectbox("Seleccionar registro para editar", editable_records, key=f"edit_record_{reset_key}")
+            selected_edit = st.selectbox(
+                "Seleccionar registro para editar",
+                editable_records,
+                key=f"edit_record_selector_{reset_key}",
+            )
+
             edit_pos = editable_indices[editable_records.index(selected_edit)]
             current = st.session_state.records[edit_pos]
-            current_yes = [a for a, v in current.get("actividades", {}).items() if v == SI]
-            new_yes = st.multiselect("Actividades con respuesta Sí", activities, default=current_yes, key=f"edit_activities_{reset_key}")
-            if st.button("💾 Guardar cambios del registro", use_container_width=True, key=f"save_edit_{reset_key}"):
-                st.session_state.records[edit_pos]["actividades"] = {activity: (SI if activity in new_yes else NO) for activity in activities}
-                st.success("Registro actualizado correctamente.")
+            current_yes = [
+                activity for activity, value in current.get("actividades", {}).items()
+                if value == SI
+            ]
+
+            st.info(
+                f"Editando: {current.get('nombre', '')} — "
+                f"{current.get('cedula', '')} — Semana: {current.get('semana', '')}"
+            )
+
+            new_yes = st.multiselect(
+                "Actividades con respuesta Sí",
+                activities,
+                default=current_yes,
+                key=f"edit_activities_record_{edit_pos}_{reset_key}",
+            )
+
+            col_save_edit, col_cancel_edit = st.columns(2)
+
+            with col_save_edit:
+                save_edit_clicked = st.button(
+                    "💾 Guardar cambios del registro",
+                    use_container_width=True,
+                    key=f"save_edit_record_{edit_pos}_{reset_key}",
+                    type="primary",
+                )
+
+            with col_cancel_edit:
+                cancel_edit_clicked = st.button(
+                    "Cancelar edición",
+                    use_container_width=True,
+                    key=f"cancel_edit_record_{edit_pos}_{reset_key}",
+                )
+
+            if save_edit_clicked:
+                st.session_state.records[edit_pos]["actividades"] = {
+                    activity: (SI if activity in new_yes else NO)
+                    for activity in activities
+                }
+                st.session_state.edit_success_message = "Registro actualizado correctamente."
+                reset_entry_form()
+                st.rerun()
+
+            if cancel_edit_clicked:
                 reset_entry_form()
                 st.rerun()
 
